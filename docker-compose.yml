@@ -1,0 +1,20 @@
+services:
+  geofinder:
+    build: .
+    image: geofinder:latest
+    container_name: geofinder
+    ports:
+      - "8000:8000"
+    environment:
+      # Sans clé, GeoFinder démarre en mode démo (panoramas synthétiques).
+      GOOGLE_MAPS_API_KEY: "${GOOGLE_MAPS_API_KEY:-}"
+      GEOFINDER_MAX_PANOS: "${GEOFINDER_MAX_PANOS:-250}"
+      GEOFINDER_SPACING_M: "${GEOFINDER_SPACING_M:-120}"
+      GEOFINDER_WORKERS: "${GEOFINDER_WORKERS:-8}"
+      GEOFINDER_SV_SIZE: "${GEOFINDER_SV_SIZE:-512x512}"
+    volumes:
+      - geofinder-data:/data
+    restart: unless-stopped
+
+volumes:
+  geofinder-data:

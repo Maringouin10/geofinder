@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GeoFinder — où cette photo a-t-elle été prise ?</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside class="panel">
+      <header class="brand">
+        <div class="logo">◎</div>
+        <div>
+          <h1>GeoFinder</h1>
+          <p class="tagline">Géolocalisation par reconnaissance d'image</p>
+        </div>
+      </header>
+
+      <div id="demo-banner" class="banner hidden">
+        <strong>Mode démo.</strong> Aucune clé <code>GOOGLE_MAPS_API_KEY</code> n'est
+        configurée : les panoramas sont des images synthétiques. Le pipeline
+        fonctionne, mais les positions retournées n'ont aucune valeur réelle.
+      </div>
+
+      <!-- 1. Préparer une ville -->
+      <section class="card">
+        <h2><span class="step">1</span> Préparer une ville</h2>
+        <p class="hint">
+          GeoFinder télécharge les panoramas Street View de la ville et calcule
+          leur empreinte visuelle. À faire une seule fois par ville.
+        </p>
+        <div class="row">
+          <input id="city-input" type="text" placeholder="Paris, Lyon, Bordeaux…" autocomplete="off" />
+          <button id="index-btn" class="primary">Indexer</button>
+        </div>
+
+        <details class="options">
+          <summary>Options de collecte</summary>
+          <label>
+            Panoramas max
+            <input id="opt-panos" type="number" min="10" max="3000" value="250" />
+          </label>
+          <label>
+            Vues par panorama
+            <input id="opt-headings" type="number" min="1" max="8" value="4" />
+          </label>
+          <label>
+            Rayon autour du centre (km)
+            <input id="opt-radius" type="number" min="0.2" max="40" step="0.5" value="6" />
+          </label>
+          <label>
+            Espacement de la grille (m)
+            <input id="opt-spacing" type="number" min="20" max="1000" step="10" value="120" />
+          </label>
+          <p class="hint small">
+            Coût Google ≈ <span id="cost-estimate">1 000</span> images
+            (panoramas × vues). L'endpoint <em>metadata</em> utilisé pour le
+            sondage est gratuit.
+          </p>
+        </details>
+
+        <div id="job" class="job hidden">
+          <div class="job-head">
+            <span id="job-step">…</span>
+            <button id="job-cancel" class="link">annuler</button>
+          </div>
+          <div class="bar"><div id="job-bar"></div></div>
+        </div>
+
+        <div id="cities" class="cities"></div>
+      </section>
+
+      <!-- 2. Trouver -->
+      <section class="card">
+        <h2><span class="step">2</span> Trouver la photo</h2>
+
+        <label id="drop" class="drop" for="photo">
+          <input id="photo" type="file" accept="image/*" hidden />
+          <img id="preview" alt="" class="hidden" />
+          <div id="drop-text">
+            <span class="drop-icon">⬆</span>
+            Dépose une photo ici<br /><small>ou clique pour choisir un fichier</small>
+          </div>
+        </label>
+
+        <div class="row">
+          <select id="city-select" title="Restreindre la recherche à une ville"></select>
+          <button id="find-btn" class="primary find" disabled>FIND</button>
+        </div>
+        <label class="checkbox">
+          <input id="opt-rerank" type="checkbox" checked />
+          Vérification géométrique (ORB + RANSAC) — plus lent, plus fiable
+        </label>
+      </section>
+
+      <!-- Résultats -->
+      <section id="results-card" class="card hidden">
+        <h2>Résultats</h2>
+        <div id="verdict"></div>
+        <ol id="results" class="results"></ol>
+      </section>
+
+      <footer class="foot">
+        Panoramas © Google Street View · Fond de carte © OpenStreetMap ·
+        Géocodage Nominatim
+      </footer>
+    </aside>
+
+    <main id="map"></main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
