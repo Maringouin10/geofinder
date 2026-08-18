@@ -29,28 +29,58 @@ CITY = City(
 
 
 class FakeResponse:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, text=None):
         self._payload = payload
         self.status_code = status_code
-        self.text = str(payload)
+        self.text = text if text is not None else str(payload)
         self.content = b"\xff\xd8\xff"
 
     def json(self):
+        if self._payload is None:
+            raise ValueError("pas du JSON")
         return self._payload
 
 
 class FakeSession:
     """Renvoie la même charge utile à chaque appel, en comptant les requêtes."""
 
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, text=None):
         self.payload = payload
         self.status_code = status_code
         self.calls = []
         self.headers = {}
+        self._text = text
 
     def get(self, url, params=None, timeout=None):
-        self.calls.append((url, params))
-        return FakeResponse(self.payload, self.status_code)
+        self.calls.append(("GET", url, params))
+        return FakeResponse(self.payload, self.status_code, self._text)
+
+    def post(self, url, data=None, timeout=None):
+        self.calls.append(("POST", url, data))
+        return FakeResponse(self.payload, self.status_code, self._text)
+
+
+class RoutedSession:
+    """Répond différemment selon l'URL, pour simuler des endpoints partiels."""
+
+    def __init__(self, routes):
+        self.routes = routes          # fragment d'URL -> (payload, status)
+        self.calls = []
+        self.headers = {}
+
+    def _resolve(self, url):
+        for fragment, (payload, status) in self.routes.items():
+            if fragment in url:
+                return FakeResponse(payload, status)
+        return FakeResponse({"error": "not found"}, 404)
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(("GET", url, params))
+        return self._resolve(url)
+
+    def post(self, url, data=None, timeout=None):
+        self.calls.append(("POST", url, data))
+        return self._resolve(url)
 
 
 # --------------------------------------------------------------- Mapillary --
@@ -131,7 +161,7 @@ def test_mapillary_discovers_and_groups_nearby_photos(monkeypatch):
     views = provider.discover(CITY, CollectOptions(max_panos=50, headings=4), CollectContext())
     assert len({v.place_id for v in views}) == 2
     assert session.calls, "l'API doit être interrogée"
-    assert "bbox" in session.calls[0][1]
+    assert "bbox" in session.calls[0][2]
 
 
 def test_mapillary_rejects_a_bad_token(monkeypatch):
@@ -156,34 +186,81 @@ def test_mapillary_reports_empty_coverage(monkeypatch):
 
 # --------------------------------------------------------------- KartaView --
 
-def test_kartaview_parses_the_documented_envelope(monkeypatch):
-    payload = {"result": {"data": [
-        {"id": 1, "lat": "48.8566", "lng": "2.3522", "heading": "90",
-         "fileurlProc": "files/photo/a.jpg"},
-        {"id": 2, "lat": "48.8567", "lng": "2.3523", "heading": "",
-         "fileurlProc": "https://cdn.example/b.jpg"},
-    ]}}
+NEARBY_PAYLOAD = {"currentPageItems": [
+    {"id": "1", "lat": "48.8566", "lng": "2.3522", "heading": "90",
+     "name": "files/photo/a.jpg"},
+    {"id": "2", "lat": "48.8567", "lng": "2.3523", "heading": "",
+     "lth_name": "files/photo/blth.jpg"},
+]}
+
+BBOX_PAYLOAD = {"result": {"data": [
+    {"id": "9", "lat": "48.8570", "lng": "2.3530", "heading": "12",
+     "fileurlProc": "https://cdn.example/9.jpg"},
+]}}
+
+
+def test_kartaview_parses_the_v1_envelope(monkeypatch):
     provider = KartaViewProvider()
-    monkeypatch.setattr(provider, "session", lambda: FakeSession(payload))
+    monkeypatch.setattr(provider, "session", lambda: FakeSession(NEARBY_PAYLOAD))
 
     views = provider.discover(CITY, CollectOptions(max_panos=10, headings=4), CollectContext())
     assert len(views) == 2
-    # URL relative complétée, URL absolue laissée intacte.
     assert views[0].ref.startswith("https://storage.openstreetcam.org/files/photo/")
-    assert views[1].ref == "https://cdn.example/b.jpg"
     assert views[1].heading == 0          # cap vide → 0 plutôt qu'une exception
+
+
+def test_kartaview_falls_back_to_the_bbox_endpoint(monkeypatch):
+    """Si la forme v1 échoue en 400, la v2 doit prendre le relais."""
+    session = RoutedSession({
+        "/1.0/list/nearby-photos/": (None, 400),
+        "/2.0/photo/": (BBOX_PAYLOAD, 200),
+    })
+    provider = KartaViewProvider()
+    monkeypatch.setattr(provider, "session", lambda: session)
+
+    views = provider.discover(CITY, CollectOptions(max_panos=10, headings=4), CollectContext())
+    assert len(views) == 1
+    assert views[0].ref == "https://cdn.example/9.jpg"
+    assert any("/2.0/photo/" in c[1] for c in session.calls)
+
+
+def test_kartaview_error_quotes_the_api_response(monkeypatch):
+    """Un 400 doit remonter le corps de la réponse, pas juste le code."""
+    provider = KartaViewProvider()
+    monkeypatch.setattr(
+        provider, "session",
+        lambda: FakeSession(None, status_code=400, text="missing parameter: bbTopLeft"),
+    )
+    with pytest.raises(providers.ProviderError) as err:
+        provider.discover(CITY, CollectOptions(), CollectContext())
+
+    message = str(err.value)
+    assert "400" in message
+    assert "missing parameter: bbTopLeft" in message      # le vrai motif
+    assert "MAPILLARY_ACCESS_TOKEN" in message            # et quoi faire ensuite
+    assert "openstreetcam.org" in message and "kartaview.org" in message
+
+
+def test_kartaview_reports_an_application_level_error(monkeypatch):
+    """L'API répond parfois 200 avec une erreur applicative dans le corps."""
+    payload = {"status": {"apiCode": "660", "apiMessage": "Invalid request"}}
+    provider = KartaViewProvider()
+    monkeypatch.setattr(provider, "session", lambda: FakeSession(payload))
+    with pytest.raises(providers.ProviderError, match="Invalid request"):
+        provider.discover(CITY, CollectOptions(), CollectContext())
+
+
+def test_kartaview_deduplicates_photos_seen_from_several_probes(monkeypatch):
+    """La grille sonde des points qui se recouvrent : une photo ne doit compter qu'une fois."""
+    provider = KartaViewProvider()
+    monkeypatch.setattr(provider, "session", lambda: FakeSession(NEARBY_PAYLOAD))
+    views = provider.discover(CITY, CollectOptions(max_panos=50, headings=4), CollectContext())
+    assert len(views) == len({v.view_id for v in views}) == 2
 
 
 def test_kartaview_needs_no_key():
     status = KartaViewProvider().status()
     assert status.ready is True and status.requires_key is False
-
-
-def test_kartaview_reports_empty_coverage(monkeypatch):
-    provider = KartaViewProvider()
-    monkeypatch.setattr(provider, "session", lambda: FakeSession({"result": {"data": []}}))
-    with pytest.raises(providers.ProviderError, match="Aucune photo"):
-        provider.discover(CITY, CollectOptions(), CollectContext())
 
 
 # ----------------------------------------------------------------- registre --

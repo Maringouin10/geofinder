@@ -83,6 +83,13 @@ La seule source utilisable **sans aucune inscription**. Couverture nettement
 plus clairsemée que Mapillary : parfait pour essayer tout de suite, insuffisant
 pour couvrir sérieusement une ville moyenne.
 
+⚠️ Le service a changé de nom, d'hôte et de version d'API au fil du temps, et
+son point d'accès public n'est pas toujours stable. GeoFinder **sonde donc les
+formes connues** au démarrage (`api.openstreetcam.org` et `api.kartaview.org`,
+en v1 « nearby-photos » puis en v2 « bbox ») et garde celle qui répond. Si
+aucune ne répond, l'erreur affichée cite ce que chaque tentative a obtenu.
+En cas de souci, Mapillary est la solution : plus fiable et mieux couverte.
+
 ### Google Street View
 
 Toujours supporté, mais nécessite une clé Cloud avec l'API **Street View
@@ -205,6 +212,33 @@ clé API ni téléchargement de poids.
 ```bash
 python -m pytest backend/tests -q
 ```
+
+---
+
+## Dépannage
+
+Une source qui refuse de répondre ? L'outil de diagnostic montre chaque requête
+et la réponse brute du serveur :
+
+```bash
+# dans le conteneur
+docker compose exec geofinder python -m backend.tools.probe all --city Bordeaux
+
+# ou en local
+python -m backend.tools.probe kartaview --city Bordeaux
+python -m backend.tools.probe mapillary --lat 44.8378 --lng -0.5792   # sans géocodage
+```
+
+Il affiche l'état de chaque source, les points d'accès essayés, le message
+d'erreur exact de l'API, puis teste le téléchargement d'une image.
+
+| Symptôme | Cause probable |
+|---|---|
+| `KartaView HTTP 400` / aucun point d'accès ne fonctionne | API publique instable ou changée — passe à Mapillary |
+| `Mapillary a refusé le jeton (401/403)` | `MAPILLARY_ACCESS_TOKEN` absent ou mal copié (format `MLY\|...`) |
+| `Aucune photo … dans cette zone` | La source répond mais ne couvre pas le secteur : élargis `radius_km` ou change de source |
+| `Géocodage impossible` | Nominatim injoignable ou limite de débit atteinte — réessaie, ou utilise `--lat/--lng` avec l'outil de diagnostic |
+| `Modèle de reconnaissance indisponible` | Poids CLIP absents du cache et réseau coupé (l'image Docker les embarque) |
 
 ---
 
