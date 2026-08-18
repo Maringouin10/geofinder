@@ -1,13 +1,19 @@
 """Contrat commun à toutes les sources d'imagerie de rue."""
 from __future__ import annotations
 
+import logging
+import time
 from abc import ABC, abstractmethod
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from typing import Callable, ClassVar, List, Optional
+from itertools import islice
+from typing import Callable, ClassVar, Iterable, Iterator, List, Optional
 
 import requests
 
 from ..geocode import City
+
+log = logging.getLogger(__name__)
 
 
 class ProviderError(RuntimeError):
@@ -42,20 +48,71 @@ class CollectOptions:
 
 @dataclass
 class CollectContext:
-    """Permet au provider de remonter sa progression et d'être interrompu."""
+    """Permet au provider de remonter sa progression, d'être interrompu, et de
+    ne pas s'éterniser : une source lente ne doit pas bloquer un job pour
+    toujours."""
     progress: Callable[[int, str], None] = field(default=lambda found, note: None)
     cancelled: Callable[[], bool] = field(default=lambda: False)
+    deadline: Optional[float] = None          # time.monotonic()
 
     def report(self, found: int, note: str) -> None:
         self.progress(found, note)
 
+    def expired(self) -> bool:
+        return self.deadline is not None and time.monotonic() > self.deadline
+
+    def should_stop(self) -> bool:
+        return self.cancelled() or self.expired()
+
     def check(self) -> None:
         if self.cancelled():
             raise Cancelled()
+        if self.expired():
+            raise TimedOut(
+                "Budget de temps dépassé pendant la recherche d'images. "
+                "La source est injoignable ou très lente ; réduis le rayon, "
+                "ou augmente GEOFINDER_DISCOVERY_BUDGET."
+            )
 
 
 class Cancelled(RuntimeError):
     pass
+
+
+class TimedOut(ProviderError):
+    pass
+
+
+def bounded_map(
+    fn: Callable,
+    items: Iterable,
+    workers: int,
+    should_stop: Optional[Callable[[], bool]] = None,
+) -> Iterator:
+    """`Executor.map` en version interruptible.
+
+    `Executor.map` soumet la totalité des tâches d'emblée : sortir de la boucle
+    n'annule rien et la fermeture du pool attend chaque requête en file. Sur une
+    grille de plusieurs centaines de points vers une API lente, cela bloque le
+    job pendant des dizaines de minutes sans aucun signe extérieur.
+
+    Ici la file reste courte, et l'arrêt annule tout ce qui n'a pas démarré.
+    """
+    pool = ThreadPoolExecutor(max_workers=workers)
+    source = iter(items)
+    queued = workers * 4
+    try:
+        pending = {pool.submit(fn, item) for item in islice(source, queued)}
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                yield future.result()
+            if should_stop is not None and should_stop():
+                break
+            for item in islice(source, len(done)):
+                pending.add(pool.submit(fn, item))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 @dataclass

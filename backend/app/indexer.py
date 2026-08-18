@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import io
+import logging
 import threading
+import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -13,6 +14,9 @@ from PIL import Image
 
 from . import config, embedder, geocode, providers, store
 from .providers import Cancelled, CollectContext, CollectOptions, ViewRef
+from .providers.base import bounded_map
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -30,6 +34,17 @@ class Job:
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     finished_at: Optional[str] = None
     cancel: bool = field(default=False, repr=False)
+
+    def announce(self, step: str, progress: Optional[float] = None) -> None:
+        """Change l'étape courante et la journalise.
+
+        Sans cela, un job bloqué est totalement muet dans `docker logs` : c'est
+        exactement ce qui rend une indexation qui piétine impossible à diagnostiquer.
+        """
+        self.step = step
+        if progress is not None:
+            self.progress = progress
+        log.info("[job %s] %s", self.id, step)
 
     def as_dict(self) -> dict:
         return {
@@ -97,12 +112,14 @@ def _check(job: Job) -> None:
 
 def _run_job(job: Job, city_name: str, provider_name: str, opts: CollectOptions) -> None:
     slug = None
+    started = time.monotonic()
     try:
         job.state = "running"
         provider = providers.get(provider_name)
+        log.info("[job %s] démarrage — ville=%r source=%s max_panos=%d rayon=%.1fkm",
+                 job.id, city_name, provider_name, opts.max_panos, opts.radius_km)
 
-        job.step = "Localisation de la ville…"
-        job.progress = 0.02
+        job.announce("Localisation de la ville…", 0.02)
         city = geocode.geocode_city(city_name)
         slug = city.slug
         job.slug = slug
@@ -113,20 +130,31 @@ def _run_job(job: Job, city_name: str, provider_name: str, opts: CollectOptions)
             _active_slugs.add(slug)
 
         _check(job)
-        job.step = f"Recherche d'images ({provider.label})…"
-        job.progress = 0.05
+        job.announce(f"Recherche d'images ({provider.label})…", 0.05)
+
+        last_log = [0.0]
 
         def on_progress(found: int, note: str) -> None:
             job.panos = found
             job.progress = 0.05 + 0.25 * min(found / max(opts.max_panos, 1), 1.0)
             job.step = note
+            # La découverte émet un point de progression par requête : on
+            # journalise au rythme humain, sinon les logs deviennent illisibles.
+            now = time.monotonic()
+            if now - last_log[0] >= 5.0:
+                last_log[0] = now
+                log.info("[job %s] %s", job.id, note)
 
-        ctx = CollectContext(progress=on_progress, cancelled=lambda: job.cancel)
+        ctx = CollectContext(
+            progress=on_progress,
+            cancelled=lambda: job.cancel,
+            deadline=time.monotonic() + config.DISCOVERY_BUDGET_S,
+        )
         refs = provider.discover(city, opts, ctx)
         job.panos = len({r.place_id for r in refs})
 
         _check(job)
-        job.step = f"Téléchargement de {len(refs)} images…"
+        job.announce(f"Téléchargement de {len(refs)} images…")
         views = _download(job, provider, slug, refs)
         if not views:
             raise RuntimeError(
@@ -136,13 +164,11 @@ def _run_job(job: Job, city_name: str, provider_name: str, opts: CollectOptions)
         job.views = len(views)
 
         _check(job)
-        job.step = f"Calcul des empreintes visuelles ({len(views)} images)…"
-        job.progress = 0.85
+        job.announce(f"Calcul des empreintes visuelles ({len(views)} images)…", 0.85)
         embeddings = embedder.embed_images(_stream_images(job, slug, views))
 
         _check(job)
-        job.step = "Enregistrement de l'index…"
-        job.progress = 0.96
+        job.announce("Enregistrement de l'index…", 0.96)
         index = store.CityIndex(
             slug=slug,
             name=city_name,
@@ -157,17 +183,24 @@ def _run_job(job: Job, city_name: str, provider_name: str, opts: CollectOptions)
         store._cache.pop(slug, None)
 
         job.state = "done"
-        job.step = f"Index prêt : {job.panos} lieux, {len(views)} vues ({provider.label})."
-        job.progress = 1.0
+        job.announce(
+            f"Index prêt : {job.panos} lieux, {len(views)} vues ({provider.label}) "
+            f"en {time.monotonic() - started:.0f}s.",
+            1.0,
+        )
     except Cancelled:
         job.state = "cancelled"
-        job.step = "Indexation annulée."
+        job.announce("Indexation annulée.")
         if slug:
             store.delete(slug)
     except Exception as exc:  # noqa: BLE001 - remonté tel quel à l'UI
         job.state = "error"
         job.error = str(exc)
         job.step = "Échec."
+        # `job.error` part vers l'UI ; la trace complète va dans les logs du
+        # conteneur, seule source exploitable quand l'UI n'est pas regardée.
+        log.error("[job %s] échec après %.0fs : %s",
+                  job.id, time.monotonic() - started, exc, exc_info=True)
     finally:
         job.finished_at = datetime.now(timezone.utc).isoformat()
         if slug:
@@ -207,11 +240,17 @@ def _download(job: Job, provider, slug: str, refs: List[ViewRef]) -> List[store.
                 done += 1
                 job.progress = 0.30 + 0.55 * (done / max(total, 1))
                 job.step = f"Téléchargement des images… {done}/{total}"
+                if done % 50 == 0 or done == total:
+                    log.info("[job %s] images %d/%d", job.id, done, total)
 
-    with ThreadPoolExecutor(max_workers=config.FETCH_WORKERS) as pool:
-        list(pool.map(work, enumerate(refs)))
+    for _ in bounded_map(work, enumerate(refs), config.FETCH_WORKERS,
+                         should_stop=lambda: job.cancel):
+        pass
 
     _check(job)
+    failed = sum(1 for r in results if r is None)
+    if failed:
+        log.warning("[job %s] %d/%d images non récupérées", job.id, failed, total)
 
     views: List[store.View] = []
     for res in results:

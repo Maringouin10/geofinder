@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +21,15 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # uvicorn ne configure que ses propres loggers : sans cela, tout ce que
+    # journalise l'application (jobs, providers) n'atteint jamais docker logs.
+    logging.basicConfig(
+        level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
+    logging.getLogger("backend").setLevel(getattr(logging, config.LOG_LEVEL, logging.INFO))
     config.ensure_dirs()
     # Le chargement de CLIP prend quelques secondes : on le fait en fond pour
     # que l'API réponde immédiatement.

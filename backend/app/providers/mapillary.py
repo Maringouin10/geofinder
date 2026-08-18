@@ -93,7 +93,7 @@ class MapillaryProvider(Provider):
                 len(places),
                 f"Mapillary : {len(places)}/{target} lieux ({i + 1}/{len(tiles)} tuiles)",
             )
-            if len(places) >= target:
+            if len(places) >= target or ctx.should_stop():
                 break
 
         if not views:
@@ -111,7 +111,7 @@ class MapillaryProvider(Provider):
             "limit": PER_TILE_LIMIT,
         }
         try:
-            resp = session.get(GRAPH_URL, params=params, timeout=30)
+            resp = session.get(GRAPH_URL, params=params, timeout=config.DISCOVERY_TIMEOUT)
         except requests.RequestException as exc:
             raise ProviderError(f"Mapillary injoignable : {exc}") from exc
 
@@ -131,7 +131,7 @@ class MapillaryProvider(Provider):
         return data if isinstance(data, list) else []
 
     def fetch(self, view: ViewRef, session: requests.Session) -> bytes:
-        resp = session.get(view.ref, timeout=30)
+        resp = session.get(view.ref, timeout=config.DOWNLOAD_TIMEOUT)
         if resp.status_code != 200:
             raise ProviderError(f"Téléchargement Mapillary HTTP {resp.status_code}")
         return resp.content

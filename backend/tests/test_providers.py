@@ -289,3 +289,60 @@ def test_cap_limits_places_and_views_per_place():
     capped = cap_views_per_place(views, CollectOptions(max_panos=4, headings=3))
     assert len({v.place_id for v in capped}) == 4
     assert len(capped) == 12
+
+
+# ------------------------------------------------ interruption / budget --
+
+def test_bounded_map_stops_without_draining_the_queue():
+    """`Executor.map` soumet tout d'emblée : sortir de la boucle n'annule rien
+    et la fermeture du pool attend chaque tâche en file. `bounded_map` doit
+    rendre la main immédiatement."""
+    import time as _time
+
+    from backend.app.providers.base import bounded_map
+
+    seen = []
+    started = _time.monotonic()
+    for result in bounded_map(
+        lambda x: (_time.sleep(0.05), x)[1], range(400), 8, should_stop=lambda: len(seen) >= 10
+    ):
+        seen.append(result)
+    elapsed = _time.monotonic() - started
+
+    assert len(seen) >= 10
+    # 400 tâches × 50 ms / 8 workers ≈ 2,5 s si la file n'est pas annulée.
+    assert elapsed < 1.0, f"la file n'a pas été annulée ({elapsed:.2f}s)"
+
+
+def test_discovery_gives_up_when_the_time_budget_is_exhausted(monkeypatch):
+    """Une source qui traîne doit faire échouer le job, pas le figer."""
+    import time as _time
+
+    from backend.app import config
+    from backend.app.providers.base import TimedOut
+
+    monkeypatch.setattr(config, "MAPILLARY_TOKEN", "MLY|fake")
+
+    class SlowSession(FakeSession):
+        def get(self, url, params=None, timeout=None):
+            _time.sleep(0.05)
+            return super().get(url, params, timeout)
+
+    provider = MapillaryProvider()
+    monkeypatch.setattr(provider, "session", lambda: SlowSession({"data": []}))
+    ctx = CollectContext(deadline=_time.monotonic() - 1)   # budget déjà dépassé
+
+    with pytest.raises(TimedOut, match="Budget de temps"):
+        provider.discover(CITY, CollectOptions(max_panos=1000), ctx)
+
+
+def test_cancellation_beats_the_deadline():
+    """Une annulation explicite reste distincte d'un dépassement de budget."""
+    import time as _time
+
+    from backend.app.providers.base import Cancelled
+
+    ctx = CollectContext(cancelled=lambda: True, deadline=_time.monotonic() - 1)
+    assert ctx.should_stop() is True
+    with pytest.raises(Cancelled):
+        ctx.check()

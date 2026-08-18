@@ -8,7 +8,6 @@ pour que le diagnostic soit immédiat.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,6 +18,7 @@ from ..geo import place_key
 from ..geocode import City
 from .base import (
     CollectContext,
+    bounded_map,
     CollectOptions,
     Provider,
     ProviderError,
@@ -101,33 +101,38 @@ class KartaViewProvider(Provider):
 
     def _collect_nearby(self, city, opts, ctx, session, endpoint) -> List[ViewRef]:
         """v1 : une requête par point d'une grille couvrant la ville."""
+        # Chaque requête rend déjà des dizaines de photos : quelques centaines de
+        # points suffisent largement. Sonder toute la grille (des milliers de
+        # points) ferait durer la découverte des dizaines de minutes pour rien.
+        budget = min(config.MAX_PROBES, max(opts.max_panos * 3, 100))
         points = sampling.grid_points(
             city,
             spacing_m=max(NEARBY_RADIUS_M * 2, opts.spacing_m),
             radius_km=opts.radius_km,
-            max_points=config.MAX_PROBES,
+            max_points=budget,
         )
         views: List[ViewRef] = []
         places: set[str] = set()
         seen: set[str] = set()
         done = 0
 
-        with ThreadPoolExecutor(max_workers=config.FETCH_WORKERS) as pool:
-            for records in pool.map(
-                lambda p: self._safe_nearby(session, endpoint, p[0], p[1]), points
-            ):
-                done += 1
-                if ctx.cancelled():
-                    break
-                for view in _to_views(records, seen):
-                    views.append(view)
-                    places.add(view.place_id)
-                ctx.report(
-                    len(places),
-                    f"KartaView : {len(places)}/{opts.max_panos} lieux ({done} points sondés)",
-                )
-                if len(places) >= opts.max_panos:
-                    break
+        def enough() -> bool:
+            return len(places) >= opts.max_panos or ctx.should_stop()
+
+        for records in bounded_map(
+            lambda p: self._safe_nearby(session, endpoint, p[0], p[1]),
+            points,
+            config.FETCH_WORKERS,
+            should_stop=enough,
+        ):
+            done += 1
+            for view in _to_views(records, seen):
+                views.append(view)
+                places.add(view.place_id)
+            ctx.report(
+                len(places),
+                f"KartaView : {len(places)}/{opts.max_panos} lieux ({done} points sondés)",
+            )
         ctx.check()
         return views
 
@@ -172,7 +177,7 @@ class KartaViewProvider(Provider):
             resp = session.post(
                 url,
                 data={"lat": f"{lat}", "lng": f"{lng}", "radius": NEARBY_RADIUS_M},
-                timeout=30,
+                timeout=config.DISCOVERY_TIMEOUT,
             )
         except requests.RequestException as exc:
             raise ProviderError(f"injoignable ({exc})") from exc
@@ -188,13 +193,13 @@ class KartaViewProvider(Provider):
             "page": page,
         }
         try:
-            resp = session.get(url, params=params, timeout=30)
+            resp = session.get(url, params=params, timeout=config.DISCOVERY_TIMEOUT)
         except requests.RequestException as exc:
             raise ProviderError(f"injoignable ({exc})") from exc
         return _records_or_raise(resp)
 
     def fetch(self, view: ViewRef, session: requests.Session) -> bytes:
-        resp = session.get(view.ref, timeout=30)
+        resp = session.get(view.ref, timeout=config.DOWNLOAD_TIMEOUT)
         if resp.status_code != 200:
             raise ProviderError(f"Téléchargement KartaView HTTP {resp.status_code}")
         return resp.content

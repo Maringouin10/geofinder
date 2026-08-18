@@ -6,7 +6,6 @@ l'endpoint `metadata` (gratuit), pour ne facturer que des images qui existent.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 import requests
@@ -16,6 +15,7 @@ from ..geo import headings_for
 from ..geocode import City
 from .base import (
     CollectContext,
+    bounded_map,
     CollectOptions,
     Provider,
     ProviderError,
@@ -53,19 +53,22 @@ class GoogleProvider(Provider):
         found: Dict[str, tuple] = {}
         probed = 0
 
-        with ThreadPoolExecutor(max_workers=config.FETCH_WORKERS) as pool:
-            for pano in pool.map(lambda p: self._safe_probe(p, radius, session), points):
-                probed += 1
-                if ctx.cancelled():
-                    break
-                if pano is not None and pano[0] not in found:
-                    found[pano[0]] = pano
-                ctx.report(
-                    len(found),
-                    f"Street View : {len(found)}/{opts.max_panos} panoramas ({probed} points sondés)",
-                )
-                if len(found) >= opts.max_panos:
-                    break
+        def enough() -> bool:
+            return len(found) >= opts.max_panos or ctx.should_stop()
+
+        for pano in bounded_map(
+            lambda p: self._safe_probe(p, radius, session),
+            points,
+            config.FETCH_WORKERS,
+            should_stop=enough,
+        ):
+            probed += 1
+            if pano is not None and pano[0] not in found:
+                found[pano[0]] = pano
+            ctx.report(
+                len(found),
+                f"Street View : {len(found)}/{opts.max_panos} panoramas ({probed} points sondés)",
+            )
         ctx.check()
 
         if not found:
@@ -103,7 +106,7 @@ class GoogleProvider(Provider):
             "source": "outdoor",
             "key": config.GOOGLE_MAPS_API_KEY,
         }
-        resp = session.get(METADATA_URL, params=params, timeout=20)
+        resp = session.get(METADATA_URL, params=params, timeout=config.DISCOVERY_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         status = data.get("status")
@@ -130,7 +133,7 @@ class GoogleProvider(Provider):
             "return_error_code": "true",
             "key": config.GOOGLE_MAPS_API_KEY,
         }
-        resp = session.get(IMAGE_URL, params=params, timeout=30)
+        resp = session.get(IMAGE_URL, params=params, timeout=config.DOWNLOAD_TIMEOUT)
         if resp.status_code != 200:
             raise ProviderError(f"Street View image HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.content

@@ -34,6 +34,12 @@ DEFAULT_MAX_PANOS = _int("GEOFINDER_MAX_PANOS", 250)
 DEFAULT_SPACING_M = _int("GEOFINDER_SPACING_M", 120)
 MAX_PROBES = _int("GEOFINDER_MAX_PROBES", 6000)
 FETCH_WORKERS = _int("GEOFINDER_WORKERS", 8)
+# Timeout court sur la découverte : une source injoignable doit échouer vite,
+# pas immobiliser le job. Les téléchargements d'images ont droit à plus.
+DISCOVERY_TIMEOUT = _int("GEOFINDER_DISCOVERY_TIMEOUT", 12)
+DOWNLOAD_TIMEOUT = _int("GEOFINDER_DOWNLOAD_TIMEOUT", 30)
+DISCOVERY_BUDGET_S = _int("GEOFINDER_DISCOVERY_BUDGET", 300)
+LOG_LEVEL = (os.getenv("GEOFINDER_LOG_LEVEL", "INFO") or "INFO").upper()
 
 # --- Recherche ----------------------------------------------------------- #
 RERANK_CANDIDATES = _int("GEOFINDER_RERANK", 40)

@@ -255,3 +255,21 @@ button.link {
   background: rgba(47,129,247,.18); color: #7cb8ff;
   border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: 700;
 }
+
+/* --- erreur d'indexation : persistante et lisible --- */
+.job-error {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  border-left: 3px solid var(--danger);
+  border-radius: 8px;
+  color: #ffb4ae;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

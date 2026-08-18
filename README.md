@@ -163,7 +163,11 @@ Toutes les variables sont optionnelles : sans aucune, GeoFinder utilise KartaVie
 | `GEOFINDER_SPACING_M` | `120` | Pas de la grille de sondage, m (Google/démo) |
 | `GEOFINDER_SV_SIZE` | `512x512` | Taille des vues rendues (Google/démo) |
 | `GEOFINDER_SV_FOV` | `90` | Champ de vision, ° (Google/démo) |
-| `GEOFINDER_WORKERS` | `8` | Téléchargements en parallèle |
+| `GEOFINDER_WORKERS` | `8` | Requêtes en parallèle |
+| `GEOFINDER_DISCOVERY_TIMEOUT` | `12` | Timeout par requête de découverte (s) |
+| `GEOFINDER_DOWNLOAD_TIMEOUT` | `30` | Timeout par image téléchargée (s) |
+| `GEOFINDER_DISCOVERY_BUDGET` | `300` | Temps max de la phase de recherche (s) |
+| `GEOFINDER_LOG_LEVEL` | `INFO` | `DEBUG` pour tout tracer |
 | `GEOFINDER_RERANK` | `40` | Candidats passés à la vérification ORB |
 | `GEOFINDER_CLIP_WEIGHT` | `0.75` | Poids CLIP vs ORB dans le score final |
 | `GEOFINDER_CLIP_MODEL` | `ViT-B-32` | Architecture open_clip |
@@ -232,12 +236,30 @@ python -m backend.tools.probe mapillary --lat 44.8378 --lng -0.5792   # sans gé
 Il affiche l'état de chaque source, les points d'accès essayés, le message
 d'erreur exact de l'API, puis teste le téléchargement d'une image.
 
+L'indexation journalise chaque étape dans les logs du conteneur, et toute
+erreur y arrive avec sa trace complète :
+
+```bash
+docker compose logs -f geofinder
+```
+
+```
+INFO  backend.app.indexer: [job 21eb…] démarrage — ville='Bordeaux' source=kartaview …
+INFO  backend.app.indexer: [job 21eb…] Localisation de la ville…
+ERROR backend.app.indexer: [job 21eb…] échec après 3s : Géocodage impossible (…)
+```
+
+Le même message s'affiche aussi, en entier et de façon persistante, sous la
+barre de progression dans l'interface.
+
 | Symptôme | Cause probable |
 |---|---|
+| Le job reste bloqué sans fin | Ne devrait plus arriver : la découverte a un budget de temps (`GEOFINDER_DISCOVERY_BUDGET`, 5 min par défaut) et échoue avec un message explicite |
 | `KartaView HTTP 400` / aucun point d'accès ne fonctionne | API publique instable ou changée — passe à Mapillary |
 | `Mapillary a refusé le jeton (401/403)` | `MAPILLARY_ACCESS_TOKEN` absent ou mal copié (format `MLY\|...`) |
 | `Aucune photo … dans cette zone` | La source répond mais ne couvre pas le secteur : élargis `radius_km` ou change de source |
-| `Géocodage impossible` | Nominatim injoignable ou limite de débit atteinte — réessaie, ou utilise `--lat/--lng` avec l'outil de diagnostic |
+| `Géocodage impossible` | Nominatim injoignable ou limite de débit atteinte — réessaie, ou utilise `--lat/--lng` avec l'outil de diagnostic. Le conteneur doit avoir un accès réseau sortant |
+| `Budget de temps dépassé` | La source répond trop lentement : réduis `radius_km` et `max_panos`, ou change de source |
 | `Modèle de reconnaissance indisponible` | Poids CLIP absents du cache et réseau coupé (l'image Docker les embarque) |
 
 ---

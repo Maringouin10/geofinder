@@ -11,6 +11,7 @@
     attribution: $("attribution"),
     costEstimate: $("cost-estimate"),
     job: $("job"), jobStep: $("job-step"), jobBar: $("job-bar"), jobCancel: $("job-cancel"),
+    jobError: $("job-error"),
     cities: $("cities"), citySelect: $("city-select"),
     drop: $("drop"), photo: $("photo"), preview: $("preview"), dropText: $("drop-text"),
     findBtn: $("find-btn"), optRerank: $("opt-rerank"),
@@ -187,6 +188,8 @@
       });
       currentJob = job.id;
       els.job.classList.remove("hidden");
+      els.jobError.classList.add("hidden");
+      els.jobError.textContent = "";
       poll();
     } catch (e) {
       toast(e.message);
@@ -208,8 +211,12 @@
           toast(job.step, true);
           await refreshCities();
         } else if (job.state === "error") {
-          finishJob();
-          toast(job.error || "Échec de l'indexation.");
+          finishJob({ keepOpen: true });
+          // Un diagnostic de source fait plusieurs lignes : il doit rester
+          // affiché, pas disparaître avec un toast au bout de 5 secondes.
+          els.jobError.textContent = job.error || "Échec de l'indexation.";
+          els.jobError.classList.remove("hidden");
+          toast("Échec de l'indexation — détail ci-dessous.");
         } else if (job.state === "cancelled") {
           finishJob();
           toast("Indexation annulée.");
@@ -224,10 +231,10 @@
     }, 900);
   }
 
-  function finishJob() {
+  function finishJob({ keepOpen = false } = {}) {
     currentJob = null;
     els.indexBtn.disabled = false;
-    setTimeout(() => els.job.classList.add("hidden"), 2500);
+    if (!keepOpen) setTimeout(() => els.job.classList.add("hidden"), 2500);
   }
 
   async function cancelJob() {
