@@ -30,8 +30,9 @@ def geofinder(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config, "CITIES_DIR", tmp_path / "cities")
     monkeypatch.setattr(config, "UPLOADS_DIR", tmp_path / "uploads")
-    monkeypatch.setattr(config, "DEMO_MODE", True)
+    monkeypatch.setattr(config, "PROVIDER", "demo")
     monkeypatch.setattr(config, "GOOGLE_MAPS_API_KEY", "")
+    monkeypatch.setattr(config, "MAPILLARY_TOKEN", "")
     config.ensure_dirs()
 
     from backend.app import embedder, geocode, store

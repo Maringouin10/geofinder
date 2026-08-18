@@ -19,31 +19,38 @@
       </header>
 
       <div id="demo-banner" class="banner hidden">
-        <strong>Mode démo.</strong> Aucune clé <code>GOOGLE_MAPS_API_KEY</code> n'est
-        configurée : les panoramas sont des images synthétiques. Le pipeline
-        fonctionne, mais les positions retournées n'ont aucune valeur réelle.
+        <strong>Mode démo.</strong> Aucune source d'images réelle n'est
+        disponible : les vues sont synthétiques. Le pipeline fonctionne, mais
+        les positions retournées n'ont aucune valeur réelle. Renseigne
+        <code>MAPILLARY_ACCESS_TOKEN</code> (jeton gratuit) pour de vraies photos.
       </div>
 
       <!-- 1. Préparer une ville -->
       <section class="card">
         <h2><span class="step">1</span> Préparer une ville</h2>
         <p class="hint">
-          GeoFinder télécharge les panoramas Street View de la ville et calcule
-          leur empreinte visuelle. À faire une seule fois par ville.
+          GeoFinder collecte l'imagerie de rue de la ville et calcule
+          l'empreinte visuelle de chaque vue. À faire une seule fois par ville.
         </p>
         <div class="row">
           <input id="city-input" type="text" placeholder="Paris, Lyon, Bordeaux…" autocomplete="off" />
           <button id="index-btn" class="primary">Indexer</button>
         </div>
 
+        <label class="field">
+          <span>Source d'images</span>
+          <select id="provider-select"></select>
+        </label>
+        <p id="provider-note" class="hint small"></p>
+
         <details class="options">
           <summary>Options de collecte</summary>
           <label>
-            Panoramas max
+            Lieux max
             <input id="opt-panos" type="number" min="10" max="3000" value="250" />
           </label>
           <label>
-            Vues par panorama
+            Vues par lieu
             <input id="opt-headings" type="number" min="1" max="8" value="4" />
           </label>
           <label>
@@ -55,9 +62,9 @@
             <input id="opt-spacing" type="number" min="20" max="1000" step="10" value="120" />
           </label>
           <p class="hint small">
-            Coût Google ≈ <span id="cost-estimate">1 000</span> images
-            (panoramas × vues). L'endpoint <em>metadata</em> utilisé pour le
-            sondage est gratuit.
+            ≈ <span id="cost-estimate">1 000</span> images à collecter
+            (lieux × vues). Mapillary et KartaView sont gratuits ; chez Google
+            seules les images téléchargées sont facturées.
           </p>
         </details>
 
@@ -103,8 +110,8 @@
       </section>
 
       <footer class="foot">
-        Panoramas © Google Street View · Fond de carte © OpenStreetMap ·
-        Géocodage Nominatim
+        <span id="attribution">Images © leurs contributeurs respectifs</span><br />
+        Fond de carte © OpenStreetMap · Géocodage Nominatim
       </footer>
     </aside>
 

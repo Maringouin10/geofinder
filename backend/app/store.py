@@ -30,7 +30,7 @@ class CityIndex:
     display_name: str
     lat: float
     lng: float
-    demo: bool
+    provider: str
     created_at: str
     views: List[View]
     embeddings: Optional[np.ndarray] = None
@@ -38,6 +38,10 @@ class CityIndex:
     @property
     def pano_count(self) -> int:
         return len({v.pano_id for v in self.views})
+
+    @property
+    def demo(self) -> bool:
+        return self.provider == "demo"
 
 
 def city_dir(slug: str) -> Path:
@@ -65,7 +69,7 @@ def save(index: CityIndex, embeddings: np.ndarray) -> None:
         "display_name": index.display_name,
         "lat": index.lat,
         "lng": index.lng,
-        "demo": index.demo,
+        "provider": index.provider,
         "created_at": index.created_at,
         "views": [asdict(v) for v in index.views],
     }
@@ -92,7 +96,7 @@ def load(slug: str, with_embeddings: bool = True) -> Optional[CityIndex]:
         display_name=meta["display_name"],
         lat=meta["lat"],
         lng=meta["lng"],
-        demo=meta.get("demo", False),
+        provider=meta.get("provider", "demo"),
         created_at=meta["created_at"],
         views=[View(**v) for v in meta["views"]],
     )

@@ -48,7 +48,7 @@ def test_find_without_index_is_rejected(client):
 
 def test_index_then_find_locates_the_source_panorama(client):
     job = client.post("/api/cities", json={
-        "city": "Testville", "max_panos": 12, "headings": 2,
+        "city": "Testville", "provider": "demo", "max_panos": 12, "headings": 2,
         "spacing_m": 120, "radius_km": 1.5,
     }).json()
 
@@ -61,6 +61,7 @@ def test_index_then_find_locates_the_source_panorama(client):
     city = cities[0]
     assert city["slug"] == "testville"
     assert city["demo"] is True
+    assert city["provider"] == "demo"
 
     # On rejoue une vue indexée comme si c'était la photo de l'utilisateur :
     # le système doit la relocaliser exactement.
@@ -89,7 +90,7 @@ def test_index_then_find_locates_the_source_panorama(client):
 
 def test_find_survives_recompression_and_resize(client):
     job = client.post("/api/cities", json={
-        "city": "Testville", "max_panos": 10, "headings": 2,
+        "city": "Testville", "provider": "demo", "max_panos": 10, "headings": 2,
         "spacing_m": 120, "radius_km": 1.5,
     }).json()
     assert _wait(job["id"], client)["state"] == "done"
@@ -113,7 +114,7 @@ def test_find_survives_recompression_and_resize(client):
 
 def test_thumbnails_are_served_and_path_traversal_blocked(client):
     job = client.post("/api/cities", json={
-        "city": "Testville", "max_panos": 10, "headings": 1,
+        "city": "Testville", "provider": "demo", "max_panos": 10, "headings": 1,
         "spacing_m": 120, "radius_km": 1.5,
     }).json()
     assert _wait(job["id"], client)["state"] == "done"
@@ -130,7 +131,7 @@ def test_thumbnails_are_served_and_path_traversal_blocked(client):
 
 def test_delete_city_removes_index(client):
     job = client.post("/api/cities", json={
-        "city": "Testville", "max_panos": 10, "headings": 1,
+        "city": "Testville", "provider": "demo", "max_panos": 10, "headings": 1,
         "spacing_m": 120, "radius_km": 1.5,
     }).json()
     assert _wait(job["id"], client)["state"] == "done"

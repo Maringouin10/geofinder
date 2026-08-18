@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.app.geocode import City, slugify  # noqa: E402
 from backend.app.sampling import clamp_bbox, grid_points  # noqa: E402
-from backend.app.streetview import distance_m, headings_for  # noqa: E402
+from backend.app.geo import distance_m, headings_for, place_key  # noqa: E402
 
 
 def make_city(**kw) -> City:

@@ -7,6 +7,8 @@
     cityInput: $("city-input"), indexBtn: $("index-btn"),
     optPanos: $("opt-panos"), optHeadings: $("opt-headings"),
     optRadius: $("opt-radius"), optSpacing: $("opt-spacing"),
+    providerSelect: $("provider-select"), providerNote: $("provider-note"),
+    attribution: $("attribution"),
     costEstimate: $("cost-estimate"),
     job: $("job"), jobStep: $("job-step"), jobBar: $("job-bar"), jobCancel: $("job-cancel"),
     cities: $("cities"), citySelect: $("city-select"),
@@ -17,6 +19,14 @@
   };
 
   let map, markers = [], pollTimer = null, currentJob = null, selectedFile = null;
+  let providers = [], activeProvider = "demo";
+
+  const ATTRIBUTION = {
+    mapillary: "Images © contributeurs Mapillary (CC BY-SA)",
+    kartaview: "Images © contributeurs KartaView (CC BY-SA)",
+    google: "Panoramas © Google Street View",
+    demo: "Images synthétiques — aucune valeur géographique",
+  };
 
   /* ---------------------------------------------------------------- carte */
   function initMap() {
@@ -52,7 +62,7 @@
         `${m.lat.toFixed(6)}, ${m.lng.toFixed(6)}<br />` +
         `<span style="opacity:.7">similarité ${(m.similarity * 100).toFixed(1)}% · ` +
         `${m.inliers} points vérifiés</span><br />` +
-        `<a href="${m.streetview_url}" target="_blank" rel="noopener">Ouvrir dans Street View →</a>`
+        `<a href="${m.source_url}" target="_blank" rel="noopener">Voir sur place →</a>`
       );
       marker.on("click", () => highlight(i));
       markers.push(marker);
@@ -89,6 +99,29 @@
     return data;
   }
 
+  function renderProviders() {
+    const auto = providers.find((p) => p.name === activeProvider);
+    els.providerSelect.innerHTML =
+      `<option value="auto">Automatique — ${escapeHtml(auto ? auto.label : activeProvider)}</option>` +
+      providers
+        .map((p) => `<option value="${p.name}">${escapeHtml(p.label)}${p.ready ? "" : " (non configurée)"}</option>`)
+        .join("");
+    els.attribution.textContent = ATTRIBUTION[activeProvider] || ATTRIBUTION.demo;
+    describeProvider();
+  }
+
+  function describeProvider() {
+    const chosen = els.providerSelect.value === "auto" ? activeProvider : els.providerSelect.value;
+    const info = providers.find((p) => p.name === chosen);
+    if (!info) return;
+    els.providerNote.textContent = info.ready
+      ? ATTRIBUTION[info.name] || ""
+      : info.reason;
+    els.providerNote.classList.toggle("provider-ko", !info.ready);
+    // Seul Google rend des vues à la demande ; ailleurs le cap vient de la photo.
+    els.optSpacing.disabled = chosen !== "google" && chosen !== "demo";
+  }
+
   function updateCost() {
     const n = (+els.optPanos.value || 0) * (+els.optHeadings.value || 0);
     els.costEstimate.textContent = n.toLocaleString("fr-FR");
@@ -105,7 +138,9 @@
       row.className = "city-item";
       row.innerHTML =
         `<span class="name">${escapeHtml(c.display_name.split(",")[0])}` +
-        (c.demo ? ' <span class="tag-demo">DEMO</span>' : "") + "</span>" +
+        (c.demo
+          ? ' <span class="tag-demo">DEMO</span>'
+          : ` <span class="tag-src">${escapeHtml(c.provider || "?")}</span>`) + "</span>" +
         `<span class="count">${c.panos} pano · ${c.views} vues</span>` +
         `<button class="del" title="Supprimer">✕</button>`;
       row.querySelector(".del").onclick = async () => {
@@ -143,6 +178,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           city,
+          provider: els.providerSelect.value || "auto",
           max_panos: +els.optPanos.value,
           headings: +els.optHeadings.value,
           radius_km: +els.optRadius.value,
@@ -298,6 +334,7 @@
     els.jobCancel.onclick = cancelJob;
     els.findBtn.onclick = find;
     els.cityInput.addEventListener("keydown", (e) => e.key === "Enter" && startIndex());
+    els.providerSelect.addEventListener("change", describeProvider);
     [els.optPanos, els.optHeadings].forEach((el) => el.addEventListener("input", updateCost));
     els.citySelect.addEventListener("change", () => {
       els.findBtn.disabled = !selectedFile;
@@ -306,7 +343,10 @@
 
     try {
       const health = await api("/api/health");
-      if (health.demo_mode) els.demoBanner.classList.remove("hidden");
+      providers = health.providers || [];
+      activeProvider = health.provider || "demo";
+      renderProviders();
+      els.demoBanner.classList.toggle("hidden", !health.demo_mode);
     } catch { /* l'API répondra plus tard */ }
 
     const cities = await refreshCities();

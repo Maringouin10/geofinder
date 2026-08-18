@@ -1,8 +1,11 @@
 # GeoFinder
 
 Géolocalisation d'une photo **par reconnaissance d'image**. Tu donnes une ville,
-GeoFinder télécharge et indexe ses panoramas Google Street View, puis tu déposes
-une photo, tu appuies sur **FIND**, et il te dit où elle a été prise — sur une carte.
+GeoFinder télécharge et indexe son imagerie de rue, puis tu déposes une photo,
+tu appuies sur **FIND**, et il te dit où elle a été prise — sur une carte.
+
+Quatre sources d'images sont supportées, dont **deux qui ne coûtent rien** —
+Google n'est pas obligatoire.
 
 Aucune donnée EXIF n'est utilisée : la position est déduite **uniquement du
 contenu visuel** de l'image.
@@ -17,7 +20,15 @@ photo ──► CLIP ──► recherche cosinus ──► top-40 candidats ─�
 ## Démarrage rapide
 
 ```bash
-cp .env.example .env          # puis renseigne GOOGLE_MAPS_API_KEY
+docker compose up --build
+```
+
+Ça suffit : sans aucune clé, GeoFinder utilise **KartaView**, qui n'en demande
+pas. Pour une bien meilleure couverture, mets un jeton Mapillary (gratuit,
+2 minutes) dans un `.env` :
+
+```bash
+cp .env.example .env          # puis renseigne MAPILLARY_ACCESS_TOKEN
 docker compose up --build
 ```
 
@@ -34,24 +45,56 @@ Sans `docker compose` :
 ```bash
 docker build -t geofinder .
 docker run -p 8000:8000 -v geofinder-data:/data \
-  -e GOOGLE_MAPS_API_KEY=... geofinder
+  -e MAPILLARY_ACCESS_TOKEN=MLY... geofinder
 ```
 
-### Mode démo (sans clé API)
+---
 
-Si `GOOGLE_MAPS_API_KEY` est vide, GeoFinder démarre en **mode démo** : les
-panoramas sont des images synthétiques générées localement. Tout le pipeline
-fonctionne (indexation, recherche, carte), ce qui permet de tester l'application
-sans compte Google — mais **les positions retournées ne correspondent à rien de
-réel**. Un bandeau orange le rappelle dans l'interface.
+## Les sources d'images
 
-### Clé Google
+Choisies dans l'interface, ou via `GEOFINDER_PROVIDER`. En `auto`, GeoFinder
+prend la première utilisable : **mapillary → kartaview → google → demo**.
 
-Il faut une clé Google Cloud avec l'API **Street View Static** activée.
-GeoFinder sonde d'abord l'endpoint `metadata` (gratuit) pour ne télécharger que
-des panoramas qui existent réellement — seules les images téléchargées sont
-facturées. Le coût d'une indexation est donc `panoramas × vues par panorama`
-(250 × 4 = 1 000 images par défaut), affiché dans les options de l'interface.
+| Source | Clé | Coût | Couverture | Remarque |
+|---|---|---|---|---|
+| **Mapillary** | jeton gratuit | gratuit | très large, mondiale | **recommandé** |
+| **KartaView** | aucune | gratuit | plus clairsemée | fonctionne sans rien configurer |
+| **Google Street View** | clé + facturation | payant | excellente | compte Google Cloud requis |
+| **Démo** | aucune | — | aucune | images synthétiques, hors ligne |
+
+### Mapillary (recommandé)
+
+Imagerie de rue participative, propriété de Meta, mais l'API v4 est ouverte et
+le jeton est **gratuit et immédiat** :
+
+1. compte sur [mapillary.com](https://www.mapillary.com) ;
+2. *Developers* → *Register application* ;
+3. copie le **client token** (format `MLY|...`) dans `MAPILLARY_ACCESS_TOKEN`.
+
+Chaque photo arrive avec sa position **et son cap réels** : contrairement à
+Google, il n'y a rien à « rendre », la vue existe déjà. Les séquences étant
+continues (des dizaines de clichés à quelques mètres d'écart), GeoFinder
+regroupe les photos par cellule de 15 m et n'en garde que `headings` par lieu —
+sinon l'index serait saturé de quasi-doublons.
+
+### KartaView (aucune clé)
+
+La seule source utilisable **sans aucune inscription**. Couverture nettement
+plus clairsemée que Mapillary : parfait pour essayer tout de suite, insuffisant
+pour couvrir sérieusement une ville moyenne.
+
+### Google Street View
+
+Toujours supporté, mais nécessite une clé Cloud avec l'API **Street View
+Static** activée et un compte de facturation. GeoFinder sonde d'abord
+l'endpoint `metadata` (gratuit) pour ne télécharger que des panoramas existants
+— seules les images téléchargées sont facturées.
+
+### Mode démo
+
+Si aucune source réelle n'est disponible, les vues sont générées localement.
+Tout le pipeline fonctionne, mais **les positions retournées ne correspondent à
+rien de réel** ; un bandeau orange le rappelle dans l'interface.
 
 ---
 
@@ -62,11 +105,20 @@ facturées. Le coût d'une indexation est donc `panoramas × vues par panorama`
 | Étape | Détail |
 |---|---|
 | Géocodage | Nominatim (OSM) → centre + bounding box, bornée à `radius_km` |
-| Échantillonnage | Grille régulière (`spacing_m`), mélangée avec une graine fixe pour une couverture homogène même si l'on s'arrête tôt |
-| Sondage | `streetview/metadata` sur chaque point → panorama le plus proche, dédupliqué par `pano_id` |
-| Collecte | `streetview` image pour chaque cap (0°/90°/180°/270° par défaut) |
+| Découverte | dépend de la source (voir ci-dessous) |
+| Regroupement | les vues sont groupées par lieu ; `max_panos` lieux × `headings` vues |
 | Empreintes | CLIP ViT-B/32 (`laion2b_s34b_b79k`) → vecteurs 512-D L2-normalisés |
 | Stockage | `/data/cities/<slug>/` : `index.json`, `embeddings.npy`, `images/` |
+
+Deux familles de sources cohabitent derrière la même interface :
+
+- **rendu à la demande** (Google, démo) — on choisit un point et un cap, le
+  serveur produit l'image ; la découverte sonde une grille régulière
+  (`spacing_m`), mélangée avec une graine fixe pour rester homogène si l'on
+  s'arrête tôt ;
+- **photos existantes** (Mapillary, KartaView) — les clichés sont déjà là, avec
+  leur position et leur cap propres ; la découverte interroge l'emprise de la
+  ville, tuile par tuile, et regroupe ce qui revient.
 
 Le job tourne en tâche de fond, avec progression et annulation.
 
@@ -81,7 +133,7 @@ Le job tourne en tâche de fond, avec progression et annulation.
    ressemblent » de « la même rue » — c'est ce qui fait la différence entre un
    classement plausible et une vraie identification.
 4. Score final `0.75 × CLIP + 0.25 × ORB`, agrégé par panorama, affiché sur une
-   carte Leaflet avec vignettes et lien Street View.
+   carte Leaflet avec vignettes et lien vers la source de l'image.
 
 La **confiance** affichée combine la similarité absolue du premier résultat, sa
 marge sur les suivants, et le nombre de points géométriquement vérifiés. En
@@ -92,17 +144,19 @@ zone indexée.
 
 ## Configuration
 
-Toutes les variables sont optionnelles sauf la clé API.
+Toutes les variables sont optionnelles : sans aucune, GeoFinder utilise KartaView.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `GOOGLE_MAPS_API_KEY` | — | Clé Street View Static. Vide → mode démo |
+| `GEOFINDER_PROVIDER` | `auto` | `auto`, `mapillary`, `kartaview`, `google`, `demo` |
+| `MAPILLARY_ACCESS_TOKEN` | — | Jeton Mapillary gratuit (`MLY\|...`) |
+| `GOOGLE_MAPS_API_KEY` | — | Clé Street View Static (facturation requise) |
 | `GEOFINDER_DATA` | `/data` | Répertoire de persistance |
-| `GEOFINDER_MAX_PANOS` | `250` | Panoramas par ville |
-| `GEOFINDER_SPACING_M` | `120` | Pas de la grille de sondage (m) |
-| `GEOFINDER_SV_SIZE` | `512x512` | Taille des vues téléchargées |
-| `GEOFINDER_SV_FOV` | `90` | Champ de vision (°) |
-| `GEOFINDER_WORKERS` | `8` | Requêtes Street View en parallèle |
+| `GEOFINDER_MAX_PANOS` | `250` | Lieux indexés par ville |
+| `GEOFINDER_SPACING_M` | `120` | Pas de la grille de sondage, m (Google/démo) |
+| `GEOFINDER_SV_SIZE` | `512x512` | Taille des vues rendues (Google/démo) |
+| `GEOFINDER_SV_FOV` | `90` | Champ de vision, ° (Google/démo) |
+| `GEOFINDER_WORKERS` | `8` | Téléchargements en parallèle |
 | `GEOFINDER_RERANK` | `40` | Candidats passés à la vérification ORB |
 | `GEOFINDER_CLIP_WEIGHT` | `0.75` | Poids CLIP vs ORB dans le score final |
 | `GEOFINDER_CLIP_MODEL` | `ViT-B-32` | Architecture open_clip |
@@ -114,11 +168,11 @@ Toutes les variables sont optionnelles sauf la clé API.
 
 | Méthode | Route | Rôle |
 |---|---|---|
-| `GET` | `/api/health` | État, mode démo, modèle chargé |
+| `GET` | `/api/health` | État, sources disponibles, modèle chargé |
 | `GET` | `/api/cities` | Villes indexées |
 | `POST` | `/api/cities` | Lance une indexation → `{job_id}` |
 | `DELETE` | `/api/cities/{slug}` | Supprime un index |
-| `GET` | `/api/cities/{slug}/images/{nom}` | Vignette d'un panorama |
+| `GET` | `/api/cities/{slug}/images/{nom}` | Vignette d'une vue |
 | `GET` | `/api/jobs/{id}` | Progression d'une indexation |
 | `POST` | `/api/jobs/{id}/cancel` | Annule une indexation |
 | `POST` | `/api/find` | `multipart` : `file`, `city`, `top_k`, `rerank` |
@@ -127,7 +181,7 @@ Toutes les variables sont optionnelles sauf la clé API.
 # indexer
 curl -X POST localhost:8000/api/cities \
   -H 'Content-Type: application/json' \
-  -d '{"city":"Bordeaux","max_panos":300,"headings":4,"radius_km":5}'
+  -d '{"city":"Bordeaux","provider":"mapillary","max_panos":300,"headings":4,"radius_km":5}'
 
 # chercher
 curl -X POST localhost:8000/api/find \
@@ -156,10 +210,13 @@ python -m pytest backend/tests -q
 
 ## Limites connues
 
-- **La couverture fait la précision.** Une photo ne peut être localisée que si un
-  panorama proche a été indexé. Avec 250 panoramas et un rayon de 6 km, la
-  grille est lâche : augmente `max_panos` et réduis `spacing_m` pour une zone
-  dense, quitte à indexer un rayon plus petit.
+- **La couverture fait la précision.** Une photo ne peut être localisée que si
+  une vue proche a été indexée. Avec 250 lieux sur 6 km de rayon, la grille est
+  lâche : augmente `max_panos` et réduis le rayon pour une zone dense.
+- **La couverture dépend de la source.** Mapillary et KartaView sont
+  participatifs : les grands axes sont bien couverts, les ruelles beaucoup
+  moins, et la qualité des photos varie (caméras d'action, pare-brise, vélos).
+  Google est plus régulier, mais payant.
 - **Intérieurs, gros plans, nature** : CLIP n'a rien à raccrocher à une façade ou
   à une géométrie de rue. Le système est fait pour des scènes de voirie.
 - **Saisons, météo, travaux, heure de la journée** dégradent l'appariement ; les
@@ -172,5 +229,7 @@ python -m pytest backend/tests -q
 
 ## Crédits
 
-Panoramas © Google Street View · Fond de carte © OpenStreetMap ·
-Géocodage Nominatim · Modèle [OpenCLIP](https://github.com/mlfoundations/open_clip)
+Images © contributeurs [Mapillary](https://www.mapillary.com) /
+[KartaView](https://kartaview.org) (CC BY-SA) ou © Google Street View selon la
+source choisie · Fond de carte © OpenStreetMap · Géocodage Nominatim ·
+Modèle [OpenCLIP](https://github.com/mlfoundations/open_clip)

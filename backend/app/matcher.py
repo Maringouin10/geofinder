@@ -20,6 +20,7 @@ class Match:
     file: str
     slug: str
     city: str
+    provider: str
     similarity: float          # cosinus CLIP brut
     inliers: int               # points d'intérêt vérifiés géométriquement
     score: float               # score combiné final
@@ -36,11 +37,23 @@ class Match:
             "similarity": round(self.similarity, 4),
             "inliers": self.inliers,
             "score": round(self.score, 4),
-            "streetview_url": (
-                "https://www.google.com/maps/@?api=1&map_action=pano"
-                f"&viewpoint={self.lat},{self.lng}&heading={self.heading}"
-            ),
+            "provider": self.provider,
+            "source_url": source_url(self.provider, self.lat, self.lng, self.heading),
         }
+
+
+def source_url(provider: str, lat: float, lng: float, heading: int) -> str:
+    """Lien « voir sur place » vers la source d'origine de l'image."""
+    if provider == "google":
+        return (
+            "https://www.google.com/maps/@?api=1&map_action=pano"
+            f"&viewpoint={lat},{lng}&heading={heading}"
+        )
+    if provider == "mapillary":
+        return f"https://www.mapillary.com/app/?lat={lat}&lng={lng}&z=17"
+    if provider == "kartaview":
+        return f"https://kartaview.org/map/@{lat},{lng},17z"
+    return f"https://www.openstreetmap.org/?mlat={lat}&mlon={lng}#map=18/{lat}/{lng}"
 
 
 def _to_cv(img: Image.Image, max_side: int = 640) -> np.ndarray:
@@ -133,6 +146,7 @@ def search(
                 file=view.file,
                 slug=index.slug,
                 city=index.display_name,
+                provider=index.provider,
                 similarity=sim,
                 inliers=inliers,
                 score=score,

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
-from . import config, embedder, indexer, matcher, store
+from . import config, embedder, indexer, matcher, providers, store
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -32,6 +32,7 @@ app = FastAPI(title="GeoFinder", version="1.0.0", lifespan=lifespan)
 
 class IndexRequest(BaseModel):
     city: str = Field(min_length=2, max_length=120)
+    provider: str = Field(default="auto")
     max_panos: int = Field(default=config.DEFAULT_MAX_PANOS, ge=10, le=3000)
     headings: int = Field(default=4, ge=1, le=8)
     spacing_m: int = Field(default=config.DEFAULT_SPACING_M, ge=20, le=1000)
@@ -40,9 +41,21 @@ class IndexRequest(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
+    active = providers.resolve_auto() if config.PROVIDER == "auto" else config.PROVIDER
     return {
         "status": "ok",
-        "demo_mode": config.DEMO_MODE,
+        "provider": active,
+        "demo_mode": active == "demo",
+        "providers": [
+            {
+                "name": s.name,
+                "label": s.label,
+                "ready": s.ready,
+                "requires_key": s.requires_key,
+                "reason": s.reason,
+            }
+            for s in providers.statuses()
+        ],
         "model": f"{config.CLIP_MODEL}/{config.CLIP_PRETRAINED}",
         "cities": len(store.list_cities()),
     }
@@ -57,6 +70,7 @@ def list_cities() -> dict:
             "display_name": c.display_name,
             "lat": c.lat,
             "lng": c.lng,
+            "provider": c.provider,
             "demo": c.demo,
             "created_at": c.created_at,
             "views": len(c.views),
@@ -69,8 +83,11 @@ def list_cities() -> dict:
 
 @app.post("/api/cities")
 def create_city_index(req: IndexRequest) -> dict:
+    if req.provider not in ("auto", *providers.names()):
+        raise HTTPException(400, f"Source d'images inconnue : « {req.provider} »")
     job = indexer.start_index_job(
         city_name=req.city.strip(),
+        provider=req.provider,
         max_panos=req.max_panos,
         headings=req.headings,
         spacing_m=req.spacing_m,
@@ -157,7 +174,6 @@ async def find(
             "matches": [m.as_dict() for m in matches],
             "best": best.as_dict(),
             "diagnostic": diag,
-            "demo_mode": config.DEMO_MODE,
         }
     )
 
