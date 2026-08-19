@@ -346,3 +346,87 @@ def test_cancellation_beats_the_deadline():
     assert ctx.should_stop() is True
     with pytest.raises(Cancelled):
         ctx.check()
+
+
+# ---------------------------------------------- robustesse réseau Mapillary --
+
+class FlakySession(FakeSession):
+    """Échoue sur les N premières requêtes, répond normalement ensuite."""
+
+    def __init__(self, payload, failures, exc=None):
+        super().__init__(payload)
+        self.remaining_failures = failures
+        self.exc = exc or __import__("requests").exceptions.ReadTimeout("read timeout=45")
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(("GET", url, params))
+        if self.remaining_failures > 0:
+            self.remaining_failures -= 1
+            raise self.exc
+        return FakeResponse(self.payload, self.status_code)
+
+
+def test_mapillary_survives_tiles_that_time_out(monkeypatch):
+    """Une tuile en échec ne doit pas condamner l'indexation : il y en a des centaines."""
+    from backend.app import config
+
+    monkeypatch.setattr(config, "MAPILLARY_TOKEN", "MLY|fake")
+    session = FlakySession({"data": [mapillary_record(1)]}, failures=5)
+    provider = MapillaryProvider()
+    monkeypatch.setattr(provider, "session", lambda: session)
+
+    views = provider.discover(CITY, CollectOptions(max_panos=1, headings=4), CollectContext())
+    assert views, "les tuiles saines doivent suffire"
+    assert session.remaining_failures == 0
+
+
+def test_mapillary_explains_a_total_timeout(monkeypatch):
+    """Si toutes les tuiles échouent, l'erreur doit nommer le motif réseau —
+    pas prétendre à tort que la zone n'est pas couverte."""
+    from backend.app import config
+
+    monkeypatch.setattr(config, "MAPILLARY_TOKEN", "MLY|fake")
+    provider = MapillaryProvider()
+    monkeypatch.setattr(
+        provider, "session", lambda: FlakySession({"data": []}, failures=10_000)
+    )
+
+    with pytest.raises(providers.ProviderError) as err:
+        provider.discover(CITY, CollectOptions(max_panos=5), CollectContext())
+
+    message = str(err.value)
+    assert "ReadTimeout" in message                 # le vrai motif
+    assert "GEOFINDER_DISCOVERY_TIMEOUT" in message  # et le levier pour le régler
+    assert "Aucune photo Mapillary" not in message   # surtout pas un faux diagnostic
+
+
+def test_mapillary_tiles_are_small_enough_to_answer():
+    """Des tuiles de plusieurs kilomètres font expirer la requête côté serveur."""
+    from backend.app.geo import distance_m
+    from backend.app.providers.mapillary import TILE_M, _tiles
+    from backend.app.sampling import clamp_bbox
+
+    # Ville étendue : la bbox n'est plus le facteur limitant.
+    big = City(query="Paris", display_name="Paris, France",
+               lat=48.8566, lng=2.3522,
+               south=48.75, north=48.95, west=2.20, east=2.50)
+
+    tiles = _tiles(*clamp_bbox(big, 6.0), TILE_M)
+    assert len(tiles) > 100, "une ville entière doit être découpée finement"
+
+    # Chaque tuile doit rester petite : c'est l'emprise, pas leur nombre, qui
+    # faisait expirer la requête côté Mapillary.
+    for south, north, west, east in (tiles[0], tiles[len(tiles) // 2], tiles[-1]):
+        assert distance_m(south, west, north, west) <= TILE_M + 50
+        assert distance_m(south, west, south, east) <= TILE_M + 50
+
+
+def test_session_retries_transient_failures():
+    """429 et 5xx sont fréquents sur ces API : la session doit reprendre seule."""
+    from backend.app.providers.demo import DemoProvider
+
+    adapter = DemoProvider().session().get_adapter("https://example/")
+    retry = adapter.max_retries
+    assert retry.total >= 1
+    assert 429 in retry.status_forcelist and 503 in retry.status_forcelist
+    assert "POST" in retry.allowed_methods      # KartaView v1 poste

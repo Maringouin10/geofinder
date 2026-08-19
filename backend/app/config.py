@@ -34,10 +34,18 @@ DEFAULT_MAX_PANOS = _int("GEOFINDER_MAX_PANOS", 250)
 DEFAULT_SPACING_M = _int("GEOFINDER_SPACING_M", 120)
 MAX_PROBES = _int("GEOFINDER_MAX_PROBES", 6000)
 FETCH_WORKERS = _int("GEOFINDER_WORKERS", 8)
-# Timeout court sur la découverte : une source injoignable doit échouer vite,
-# pas immobiliser le job. Les téléchargements d'images ont droit à plus.
-DISCOVERY_TIMEOUT = _int("GEOFINDER_DISCOVERY_TIMEOUT", 12)
+# Connexion et lecture ont des timeouts séparés : un hôte injoignable doit
+# échouer en quelques secondes, alors qu'une requête acceptée mais coûteuse
+# (Mapillary sur une grande emprise) mérite qu'on l'attende.
+CONNECT_TIMEOUT = _int("GEOFINDER_CONNECT_TIMEOUT", 8)
+DISCOVERY_TIMEOUT = _int("GEOFINDER_DISCOVERY_TIMEOUT", 45)
 DOWNLOAD_TIMEOUT = _int("GEOFINDER_DOWNLOAD_TIMEOUT", 30)
+HTTP_RETRIES = _int("GEOFINDER_HTTP_RETRIES", 2)
+
+
+def timeouts(read: int) -> tuple[int, int]:
+    """Couple (connexion, lecture) attendu par requests."""
+    return CONNECT_TIMEOUT, read
 DISCOVERY_BUDGET_S = _int("GEOFINDER_DISCOVERY_BUDGET", 300)
 LOG_LEVEL = (os.getenv("GEOFINDER_LOG_LEVEL", "INFO") or "INFO").upper()
 

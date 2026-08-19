@@ -145,10 +145,34 @@ class Provider(ABC):
         return ProviderStatus(self.name, self.label, True, self.requires_key)
 
     def session(self) -> requests.Session:
+        """Session HTTP avec reprise automatique.
+
+        Les API d'imagerie limitent le débit (429) et ont des à-coups : sans
+        reprise, une seule requête malchanceuse fait perdre toute une tuile.
+        """
+        from urllib3.util.retry import Retry
+
         from .. import config
 
         s = requests.Session()
         s.headers["User-Agent"] = config.USER_AGENT
+        retry = Retry(
+            total=config.HTTP_RETRIES,
+            connect=config.HTTP_RETRIES,
+            read=config.HTTP_RETRIES,
+            status=config.HTTP_RETRIES,
+            backoff_factor=0.6,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "POST"}),
+            raise_on_status=False,
+        )
+        adapter = requests.adapters.HTTPAdapter(
+            max_retries=retry,
+            pool_connections=config.FETCH_WORKERS,
+            pool_maxsize=config.FETCH_WORKERS * 2,
+        )
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
         return s
 
     @abstractmethod

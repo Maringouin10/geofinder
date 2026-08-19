@@ -8,7 +8,7 @@ réels — pas besoin de « rendre » une vue, elle existe déjà.
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -18,6 +18,7 @@ from ..geocode import City
 from ..sampling import clamp_bbox
 from .base import (
     CollectContext,
+    bounded_map,
     CollectOptions,
     Provider,
     ProviderError,
@@ -28,10 +29,12 @@ from .base import (
 
 GRAPH_URL = "https://graph.mapillary.com/images"
 
-# L'API plafonne à 2000 résultats par appel et ne pagine pas sur une emprise :
-# on découpe donc la ville en tuiles et on interroge tuile par tuile.
-TILE_GRID = 4
-PER_TILE_LIMIT = 500
+# Une emprise large coûte très cher côté serveur : sur une ville entière la
+# requête dépasse la minute et finit en read timeout. On interroge donc de
+# petites tuiles, en parallèle, et on s'arrête dès qu'on a assez de lieux.
+TILE_M = 400
+PER_TILE_LIMIT = 100
+MAX_TILES = 600
 
 FIELDS = ",".join([
     "id",
@@ -72,38 +75,67 @@ class MapillaryProvider(Provider):
         if not config.MAPILLARY_TOKEN:
             raise ProviderError(self.status().reason)
 
-        south, north, west, east = clamp_bbox(city, opts.radius_km)
-        tiles = _tiles(south, north, west, east, TILE_GRID)
+        tiles = _tiles(*clamp_bbox(city, opts.radius_km), TILE_M)
         random.Random(1337).shuffle(tiles)
+        tiles = tiles[:MAX_TILES]
 
         session = self.session()
         views: List[ViewRef] = []
         places: set[str] = set()
+        seen: set[str] = set()
         target = opts.max_panos
+        done = 0
+        errors: List[str] = []
 
-        for i, tile in enumerate(tiles):
-            ctx.check()
-            for record in self._query_tile(session, tile):
+        def enough() -> bool:
+            return len(places) >= target or ctx.should_stop()
+
+        for records, error in bounded_map(
+            lambda tile: self._query_tile(session, tile),
+            tiles,
+            config.FETCH_WORKERS,
+            should_stop=enough,
+        ):
+            done += 1
+            if error:
+                errors.append(error)
+            for record in records:
                 view = _to_view(record)
-                if view is None:
+                if view is None or view.view_id in seen:
                     continue
+                seen.add(view.view_id)
                 views.append(view)
                 places.add(view.place_id)
             ctx.report(
                 len(places),
-                f"Mapillary : {len(places)}/{target} lieux ({i + 1}/{len(tiles)} tuiles)",
+                f"Mapillary : {len(places)}/{target} lieux ({done}/{len(tiles)} tuiles)",
             )
-            if len(places) >= target or ctx.should_stop():
-                break
+        ctx.check()
 
         if not views:
+            if errors:
+                # Toutes les tuiles ont échoué : c'est un problème de liaison,
+                # pas une absence de couverture. On cite le motif.
+                raise ProviderError(
+                    f"Mapillary n'a répondu à aucune des {done} tuiles interrogées.\n"
+                    f"Premier motif : {errors[0]}\n"
+                    "Si c'est un dépassement de délai, réduis radius_km ou augmente "
+                    "GEOFINDER_DISCOVERY_TIMEOUT."
+                )
             raise ProviderError(
-                "Aucune photo Mapillary dans cette zone. Essaie un rayon plus grand, "
-                "une ville mieux couverte, ou vérifie le jeton d'accès."
+                "Aucune photo Mapillary dans cette zone. Essaie un rayon plus grand "
+                "ou une ville mieux couverte."
             )
         return cap_views_per_place(views, opts)
 
-    def _query_tile(self, session: requests.Session, tile: Tuple[float, float, float, float]) -> Iterable[Dict[str, Any]]:
+    def _query_tile(
+        self, session: requests.Session, tile: Tuple[float, float, float, float]
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Interroge une tuile. Retourne (photos, motif d'échec).
+
+        Une tuile qui échoue ne condamne pas l'indexation — il y en a des
+        centaines. Seul un jeton refusé est fatal : réessayer n'y changerait rien.
+        """
         south, north, west, east = tile
         params = {
             "fields": FIELDS,
@@ -111,39 +143,53 @@ class MapillaryProvider(Provider):
             "limit": PER_TILE_LIMIT,
         }
         try:
-            resp = session.get(GRAPH_URL, params=params, timeout=config.DISCOVERY_TIMEOUT)
+            resp = session.get(
+                GRAPH_URL, params=params, timeout=config.timeouts(config.DISCOVERY_TIMEOUT)
+            )
         except requests.RequestException as exc:
-            raise ProviderError(f"Mapillary injoignable : {exc}") from exc
+            return [], f"{type(exc).__name__} — {exc}"
 
         if resp.status_code in (401, 403):
             raise ProviderError(
-                "Mapillary a refusé le jeton (HTTP "
-                f"{resp.status_code}). Vérifie MAPILLARY_ACCESS_TOKEN."
+                f"Mapillary a refusé le jeton (HTTP {resp.status_code}). "
+                "Vérifie MAPILLARY_ACCESS_TOKEN : il doit commencer par « MLY| » "
+                f"et provenir de mapillary.com → Developers. Réponse : {resp.text[:200]}"
             )
         if resp.status_code != 200:
-            # Une tuile qui échoue ne doit pas condamner toute l'indexation.
-            return []
+            return [], f"HTTP {resp.status_code} — {resp.text[:200]}"
         try:
             payload = resp.json()
         except ValueError:
-            return []
+            return [], "réponse non-JSON"
         data = payload.get("data")
-        return data if isinstance(data, list) else []
+        return (data if isinstance(data, list) else []), None
 
     def fetch(self, view: ViewRef, session: requests.Session) -> bytes:
-        resp = session.get(view.ref, timeout=config.DOWNLOAD_TIMEOUT)
+        resp = session.get(view.ref, timeout=config.timeouts(config.DOWNLOAD_TIMEOUT))
         if resp.status_code != 200:
             raise ProviderError(f"Téléchargement Mapillary HTTP {resp.status_code}")
         return resp.content
 
 
-def _tiles(south: float, north: float, west: float, east: float, n: int) -> List[Tuple[float, float, float, float]]:
-    dlat = (north - south) / n
-    dlng = (east - west) / n
+def _tiles(south: float, north: float, west: float, east: float,
+           tile_m: float) -> List[Tuple[float, float, float, float]]:
+    """Découpe l'emprise en tuiles d'environ `tile_m` de côté."""
+    from ..geo import EARTH_M_PER_DEG, lng_scale
+
+    mid_lat = (south + north) / 2
+    dlat = tile_m / EARTH_M_PER_DEG
+    dlng = tile_m / lng_scale(mid_lat)
+    rows = max(int((north - south) / dlat) + 1, 1)
+    cols = max(int((east - west) / dlng) + 1, 1)
     return [
-        (south + i * dlat, south + (i + 1) * dlat, west + j * dlng, west + (j + 1) * dlng)
-        for i in range(n)
-        for j in range(n)
+        (
+            south + i * dlat,
+            min(south + (i + 1) * dlat, north),
+            west + j * dlng,
+            min(west + (j + 1) * dlng, east),
+        )
+        for i in range(rows)
+        for j in range(cols)
     ]
 
 

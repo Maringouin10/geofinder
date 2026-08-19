@@ -77,6 +77,13 @@ continues (des dizaines de clichés à quelques mètres d'écart), GeoFinder
 regroupe les photos par cellule de 15 m et n'en garde que `headings` par lieu —
 sinon l'index serait saturé de quasi-doublons.
 
+La ville est interrogée par **petites tuiles de 400 m, en parallèle**, et la
+collecte s'arrête dès qu'assez de lieux sont réunis. C'est ce qui rend la
+découverte rapide : une requête couvrant plusieurs kilomètres carrés dépasse
+la minute côté serveur et finit en dépassement de délai. Une tuile qui échoue
+est simplement ignorée — il y en a des centaines ; l'indexation n'échoue que
+si elles échouent toutes, et l'erreur cite alors le motif réseau exact.
+
 ### KartaView (aucune clé)
 
 La seule source utilisable **sans aucune inscription**. Couverture nettement
@@ -164,8 +171,10 @@ Toutes les variables sont optionnelles : sans aucune, GeoFinder utilise KartaVie
 | `GEOFINDER_SV_SIZE` | `512x512` | Taille des vues rendues (Google/démo) |
 | `GEOFINDER_SV_FOV` | `90` | Champ de vision, ° (Google/démo) |
 | `GEOFINDER_WORKERS` | `8` | Requêtes en parallèle |
-| `GEOFINDER_DISCOVERY_TIMEOUT` | `12` | Timeout par requête de découverte (s) |
-| `GEOFINDER_DOWNLOAD_TIMEOUT` | `30` | Timeout par image téléchargée (s) |
+| `GEOFINDER_CONNECT_TIMEOUT` | `8` | Timeout d'établissement de connexion (s) |
+| `GEOFINDER_DISCOVERY_TIMEOUT` | `45` | Timeout de lecture, découverte (s) |
+| `GEOFINDER_DOWNLOAD_TIMEOUT` | `30` | Timeout de lecture, image (s) |
+| `GEOFINDER_HTTP_RETRIES` | `2` | Reprises sur 429/5xx et coupures |
 | `GEOFINDER_DISCOVERY_BUDGET` | `300` | Temps max de la phase de recherche (s) |
 | `GEOFINDER_LOG_LEVEL` | `INFO` | `DEBUG` pour tout tracer |
 | `GEOFINDER_RERANK` | `40` | Candidats passés à la vérification ORB |
@@ -260,6 +269,7 @@ barre de progression dans l'interface.
 | `Aucune photo … dans cette zone` | La source répond mais ne couvre pas le secteur : élargis `radius_km` ou change de source |
 | `Géocodage impossible` | Nominatim injoignable ou limite de débit atteinte — réessaie, ou utilise `--lat/--lng` avec l'outil de diagnostic. Le conteneur doit avoir un accès réseau sortant |
 | `Budget de temps dépassé` | La source répond trop lentement : réduis `radius_km` et `max_panos`, ou change de source |
+| `Read timed out` sur une source | Requête acceptée mais trop lourde : augmente `GEOFINDER_DISCOVERY_TIMEOUT`, ou réduis `radius_km` |
 | `Modèle de reconnaissance indisponible` | Poids CLIP absents du cache et réseau coupé (l'image Docker les embarque) |
 
 ---
