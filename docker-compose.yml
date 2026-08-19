@@ -2,7 +2,10 @@ services:
   geofinder:
     build: .
     image: geofinder:latest
-    container_name: geofinder
+    # Pas de container_name : un nom fixe empêche Compose de recréer le
+    # conteneur proprement, et le moindre conteneur resté en place fait
+    # échouer « up » sur un conflit de nom. Compose nomme lui-même
+    # geofinder-geofinder-1, et gère le remplacement sans heurt.
     ports:
       - "8000:8000"
     environment:

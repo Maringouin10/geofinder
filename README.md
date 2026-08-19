@@ -249,7 +249,7 @@ L'indexation journalise chaque étape dans les logs du conteneur, et toute
 erreur y arrive avec sa trace complète :
 
 ```bash
-docker compose logs -f geofinder
+docker compose -p geofinder logs -f geofinder
 ```
 
 ```
@@ -263,6 +263,7 @@ barre de progression dans l'interface.
 
 | Symptôme | Cause probable |
 |---|---|
+| `Conflict. The container name "/geofinder" is already in use` | Un conteneur est resté en place. `docker rm -f geofinder`, puis relance. Ne devrait plus se reproduire : le nom fixe a été retiré du compose |
 | Le job reste bloqué sans fin | Ne devrait plus arriver : la découverte a un budget de temps (`GEOFINDER_DISCOVERY_BUDGET`, 5 min par défaut) et échoue avec un message explicite |
 | `KartaView HTTP 400` / aucun point d'accès ne fonctionne | API publique instable ou changée — passe à Mapillary |
 | `Mapillary a refusé le jeton (401/403)` | `MAPILLARY_ACCESS_TOKEN` absent ou mal copié (format `MLY\|...`) |
