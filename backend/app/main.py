@@ -66,7 +66,7 @@ def health() -> dict:
             }
             for s in providers.statuses()
         ],
-        "model": f"{config.CLIP_MODEL}/{config.CLIP_PRETRAINED}",
+        "model": config.model_id(),
         "cities": len(store.list_cities()),
     }
 
@@ -82,6 +82,8 @@ def list_cities() -> dict:
             "lng": c.lng,
             "provider": c.provider,
             "demo": c.demo,
+            "model": c.model,
+            "stale": c.stale,
             "created_at": c.created_at,
             "views": len(c.views),
             "panos": c.pano_count,
@@ -176,6 +178,14 @@ async def find(
         # Cas typique : poids du modèle indisponibles (cache vide + réseau coupé).
         raise HTTPException(503, f"Modèle de reconnaissance indisponible : {exc}") from exc
     if not matches:
+        if diag.get("skipped_indexes"):
+            raise HTTPException(
+                409,
+                "Les index disponibles ont été construits avec un autre modèle de "
+                "reconnaissance et ne sont plus comparables : "
+                + ", ".join(diag["skipped_indexes"])
+                + f". Réindexe la ville (modèle actuel : {config.model_id()}).",
+            )
         return JSONResponse({"matches": [], "best": None, "diagnostic": diag})
 
     best = matches[0]

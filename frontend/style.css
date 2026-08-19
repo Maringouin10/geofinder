@@ -273,3 +273,21 @@ button.link {
   overflow-y: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* --- aveu d'incertitude : plus visible qu'un simple pourcentage --- */
+.uncertain {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.4);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  color: #f0d9a0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tag-stale {
+  background: rgba(248, 81, 73, .18); color: #ff9a92;
+  border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: 700;
+}
+.verdict-box.uncertain-box { border-left-color: var(--warn); opacity: .85; }

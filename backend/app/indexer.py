@@ -178,6 +178,7 @@ def _run_job(job: Job, city_name: str, provider_name: str, opts: CollectOptions)
             provider=provider.name,
             created_at=datetime.now(timezone.utc).isoformat(),
             views=views,
+            model=config.model_id(),
         )
         store.save(index, embeddings)
         store._cache.pop(slug, None)

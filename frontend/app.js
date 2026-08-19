@@ -16,6 +16,7 @@
     drop: $("drop"), photo: $("photo"), preview: $("preview"), dropText: $("drop-text"),
     findBtn: $("find-btn"), optRerank: $("opt-rerank"),
     resultsCard: $("results-card"), results: $("results"), verdict: $("verdict"),
+    uncertainNote: $("uncertain-note"),
     demoBanner: $("demo-banner"), toast: $("toast"),
   };
 
@@ -141,7 +142,9 @@
         `<span class="name">${escapeHtml(c.display_name.split(",")[0])}` +
         (c.demo
           ? ' <span class="tag-demo">DEMO</span>'
-          : ` <span class="tag-src">${escapeHtml(c.provider || "?")}</span>`) + "</span>" +
+          : ` <span class="tag-src">${escapeHtml(c.provider || "?")}</span>`) +
+        (c.stale ? ' <span class="tag-stale" title="Construit avec un autre modèle — à réindexer">PÉRIMÉ</span>' : "") +
+        "</span>" +
         `<span class="count">${c.panos} pano · ${c.views} vues</span>` +
         `<button class="del" title="Supprimer">✕</button>`;
       row.querySelector(".del").onclick = async () => {
@@ -302,7 +305,20 @@
 
     const best = matches[0];
     const conf = data.diagnostic?.confidence ?? 0;
-    const level = conf >= 0.6 ? "" : "low";
+    const uncertain = data.diagnostic?.uncertain === true;
+    const level = uncertain ? "uncertain-box" : conf >= 0.6 ? "" : "low";
+
+    // Mieux vaut annoncer l'incertitude que désigner un lieu avec aplomb :
+    // une réponse fausse mais assurée est pire qu'un « je ne sais pas ».
+    els.uncertainNote.classList.toggle("hidden", !uncertain);
+    if (uncertain) {
+      els.uncertainNote.innerHTML =
+        "<strong>Localisation incertaine.</strong> Aucune vue indexée ne " +
+        "correspond vraiment à cette photo. Les propositions ci-dessous sont " +
+        "les moins mauvaises, pas des réponses. Le lieu n'est probablement pas " +
+        "couvert : réindexe la zone avec un rayon plus petit et plus de lieux.";
+    }
+
     els.verdict.innerHTML =
       `<div class="verdict-box ${level}">` +
       `<div class="verdict-coords">${best.lat.toFixed(6)}, ${best.lng.toFixed(6)}</div>` +
@@ -310,8 +326,8 @@
       `<div class="verdict-meta">Confiance ${(conf * 100).toFixed(0)}% · ` +
       `similarité ${(best.similarity * 100).toFixed(1)}% · ` +
       `${best.inliers} points vérifiés · ` +
+      `${best.support} vues voisines concordantes · ` +
       `${(data.diagnostic?.views_searched || 0).toLocaleString("fr-FR")} vues comparées</div>` +
-      (conf < 0.6 ? '<div class="verdict-meta">⚠ Confiance faible : la photo n\'est peut-être pas dans la zone indexée.</div>' : "") +
       `</div>`;
 
     matches.forEach((m, i) => {
@@ -323,7 +339,7 @@
         `<div class="meta">` +
         `<div class="coords">${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}</div>` +
         `<div class="sub">score ${(m.score * 100).toFixed(0)}% · sim ${(m.similarity * 100).toFixed(1)}% · ` +
-        `${m.inliers} pts · cap ${m.heading}°</div>` +
+        `${m.inliers} pts · ${m.support} voisins · cap ${m.heading}°</div>` +
         `</div>`;
       li.onclick = () => highlight(i);
       els.results.appendChild(li);

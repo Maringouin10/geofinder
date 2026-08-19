@@ -24,8 +24,15 @@ MAPILLARY_TOKEN = (os.getenv("MAPILLARY_ACCESS_TOKEN", "") or "").strip()
 GOOGLE_MAPS_API_KEY = (os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
 
 # --- Modèle de reconnaissance d'image ------------------------------------ #
-CLIP_MODEL = os.getenv("GEOFINDER_CLIP_MODEL", "ViT-B-32")
-CLIP_PRETRAINED = os.getenv("GEOFINDER_CLIP_PRETRAINED", "laion2b_s34b_b79k")
+# ViT-B/16 découpe l'image en patches deux fois plus fins que ViT-B/32 : il
+# distingue bien mieux deux façades qui se ressemblent de loin. Le surcoût est
+# supportable — l'encodage reste une poignée de minutes pour un millier de vues.
+CLIP_MODEL = os.getenv("GEOFINDER_CLIP_MODEL", "ViT-B-16")
+CLIP_PRETRAINED = os.getenv("GEOFINDER_CLIP_PRETRAINED", "laion2b_s34b_b88k")
+
+
+def model_id() -> str:
+    return f"{CLIP_MODEL}/{CLIP_PRETRAINED}"
 
 # --- Collecte ------------------------------------------------------------ #
 STREETVIEW_SIZE = os.getenv("GEOFINDER_SV_SIZE", "512x512")
@@ -50,9 +57,34 @@ DISCOVERY_BUDGET_S = _int("GEOFINDER_DISCOVERY_BUDGET", 300)
 LOG_LEVEL = (os.getenv("GEOFINDER_LOG_LEVEL", "INFO") or "INFO").upper()
 
 # --- Recherche ----------------------------------------------------------- #
-RERANK_CANDIDATES = _int("GEOFINDER_RERANK", 40)
-CLIP_WEIGHT = float(os.getenv("GEOFINDER_CLIP_WEIGHT", "0.75"))
-ORB_WEIGHT = 1.0 - CLIP_WEIGHT
+RERANK_CANDIDATES = _int("GEOFINDER_RERANK", 48)
+CLIP_WEIGHT = float(os.getenv("GEOFINDER_CLIP_WEIGHT", "0.6"))
+GEOMETRY_WEIGHT = float(os.getenv("GEOFINDER_GEOMETRY_WEIGHT", "0.4"))
+
+# Échelle ABSOLUE de la similarité cosinus. Une normalisation relative au lot
+# de candidats donnerait toujours 1,0 au premier, même quand rien ne
+# correspond : c'est ainsi qu'on désigne un lieu au hasard avec assurance.
+SIM_FLOOR = float(os.getenv("GEOFINDER_SIM_FLOOR", "0.55"))
+SIM_CEIL = float(os.getenv("GEOFINDER_SIM_CEIL", "0.90"))
+
+# Nombre d'inliers géométriques valant une certitude.
+INLIER_TARGET = _int("GEOFINDER_INLIER_TARGET", 25)
+
+# Vote de voisinage : un vrai lieu est confirmé par les vues alentour ;
+# un faux positif est isolé.
+CONSENSUS_RADIUS_M = _int("GEOFINDER_CONSENSUS_RADIUS_M", 150)
+CONSENSUS_WEIGHT = float(os.getenv("GEOFINDER_CONSENSUS_WEIGHT", "0.35"))
+
+# Deux résultats distants de moins de ça décrivent le même endroit : la marge
+# doit se mesurer contre un concurrent réellement ailleurs.
+RIVAL_SEPARATION_M = _int("GEOFINDER_RIVAL_SEPARATION_M", 250)
+
+# En dessous, GeoFinder annonce qu'il ne sait pas plutôt que de trancher.
+MIN_CONFIDENCE = float(os.getenv("GEOFINDER_MIN_CONFIDENCE", "0.35"))
+
+# Recadrages du cliché requête : une photo de touriste est plus large qu'une
+# vue de rue, zoomer rapproche les deux cadrages.
+QUERY_CROPS = [float(x) for x in os.getenv("GEOFINDER_QUERY_CROPS", "1.0,0.7,0.5").split(",")]
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "GeoFinder/1.1 (image-based geolocation)"

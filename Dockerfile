@@ -22,8 +22,15 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu \
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install -r /app/backend/requirements.txt
 
-# Poids CLIP embarqués dans l'image : le conteneur démarre sans télécharger 600 Mo.
-RUN python -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')"
+# Poids CLIP embarqués dans l'image : le conteneur démarre sans rien télécharger.
+# ViT-B/16 découpe l'image en patches deux fois plus fins que ViT-B/32 et
+# distingue nettement mieux deux façades semblables.
+ARG CLIP_MODEL=ViT-B-16
+ARG CLIP_PRETRAINED=laion2b_s34b_b88k
+RUN M="$CLIP_MODEL" P="$CLIP_PRETRAINED" python -c \
+      "import open_clip, os; open_clip.create_model_and_transforms(os.environ['M'], pretrained=os.environ['P'])" \
+    && echo "modele $CLIP_MODEL/$CLIP_PRETRAINED embarque"
+ENV GEOFINDER_CLIP_MODEL=$CLIP_MODEL GEOFINDER_CLIP_PRETRAINED=$CLIP_PRETRAINED
 
 COPY backend/ /app/backend/
 COPY frontend/ /app/frontend/

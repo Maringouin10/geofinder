@@ -138,21 +138,42 @@ Le job tourne en tâche de fond, avec progression et annulation.
 
 ### 2. Recherche
 
-1. La photo est encodée par le même modèle CLIP.
-2. Produit scalaire contre la matrice d'embeddings de la ville — les vecteurs
-   étant normalisés, c'est directement le cosinus. Les 40 meilleurs candidats
-   sont retenus.
-3. **Revérification géométrique** : pour chaque candidat, appariement ORB puis
-   homographie RANSAC. Le nombre d'inliers distingue « deux rues qui se
-   ressemblent » de « la même rue » — c'est ce qui fait la différence entre un
-   classement plausible et une vraie identification.
-4. Score final `0.75 × CLIP + 0.25 × ORB`, agrégé par panorama, affiché sur une
-   carte Leaflet avec vignettes et lien vers la source de l'image.
+1. La photo est encodée en **plusieurs recadrages** (entier, 70 %, 50 %). Un
+   cliché de touriste couvre un champ bien plus large qu'une vue de rue ;
+   chaque vue de la base est jugée sous le cadrage qui lui est le plus
+   favorable.
+2. Produit scalaire contre la matrice d'embeddings — les vecteurs étant
+   normalisés, c'est directement le cosinus. Les 48 meilleurs sont retenus.
+3. **Vérification géométrique** : appariement SIFT, test du ratio de Lowe,
+   vérification croisée, puis **matrice fondamentale** estimée par RANSAC. Une
+   homographie supposerait une scène plane ou une rotation pure — faux dans une
+   rue, où les plans ont des profondeurs différentes ; la matrice fondamentale
+   n'exige qu'une géométrie épipolaire cohérente.
+4. **Vote de voisinage** : un lieu corroboré par d'autres bonnes réponses dans
+   un rayon de 150 m est bonifié. C'est le garde-fou décisif — une confusion
+   produit un pic isolé, un vrai lieu produit un groupe.
+5. Score final `0.6 × visuel + 0.4 × géométrie`, puis vote de voisinage.
 
-La **confiance** affichée combine la similarité absolue du premier résultat, sa
-marge sur les suivants, et le nombre de points géométriquement vérifiés. En
-dessous de 60 %, l'interface avertit que la photo n'est probablement pas dans la
-zone indexée.
+#### Savoir dire « je ne sais pas »
+
+La similarité est jugée sur une **échelle absolue** (`SIM_FLOOR` → `SIM_CEIL`),
+jamais relative au lot de candidats. Une normalisation relative — l'erreur des
+premières versions — donne toujours la note maximale au premier candidat, même
+quand rien ne correspond : le système désigne alors un lieu au hasard avec
+aplomb. En dessous de `GEOFINDER_MIN_CONFIDENCE`, l'interface annonce
+explicitement que la photo n'est probablement pas dans la zone couverte, au lieu
+de trancher.
+
+La marge de confiance se mesure contre le meilleur concurrent situé à plus de
+250 m : les résultats suivants sont le plus souvent d'autres vues du **même**
+endroit, et les compter comme rivaux faisait douter de bonnes réponses.
+
+#### Cohérence du modèle
+
+L'index enregistre le modèle qui l'a produit. Deux modèles produisent des
+vecteurs incomparables : un index construit avec un autre est marqué
+**PÉRIMÉ** et écarté de la recherche, plutôt que de fournir un classement
+arbitraire d'apparence sérieuse. Il faut alors réindexer la ville.
 
 ---
 
@@ -177,10 +198,19 @@ Toutes les variables sont optionnelles : sans aucune, GeoFinder utilise KartaVie
 | `GEOFINDER_HTTP_RETRIES` | `2` | Reprises sur 429/5xx et coupures |
 | `GEOFINDER_DISCOVERY_BUDGET` | `300` | Temps max de la phase de recherche (s) |
 | `GEOFINDER_LOG_LEVEL` | `INFO` | `DEBUG` pour tout tracer |
-| `GEOFINDER_RERANK` | `40` | Candidats passés à la vérification ORB |
-| `GEOFINDER_CLIP_WEIGHT` | `0.75` | Poids CLIP vs ORB dans le score final |
-| `GEOFINDER_CLIP_MODEL` | `ViT-B-32` | Architecture open_clip |
-| `GEOFINDER_CLIP_PRETRAINED` | `laion2b_s34b_b79k` | Poids pré-entraînés |
+| `GEOFINDER_RERANK` | `48` | Candidats passés à la vérification géométrique |
+| `GEOFINDER_CLIP_WEIGHT` | `0.6` | Poids du visuel dans le score |
+| `GEOFINDER_GEOMETRY_WEIGHT` | `0.4` | Poids de la vérification géométrique |
+| `GEOFINDER_SIM_FLOOR` | `0.55` | Cosinus en dessous duquel c'est du bruit |
+| `GEOFINDER_SIM_CEIL` | `0.90` | Cosinus valant une certitude visuelle |
+| `GEOFINDER_INLIER_TARGET` | `25` | Inliers valant une certitude géométrique |
+| `GEOFINDER_CONSENSUS_RADIUS_M` | `150` | Rayon du vote de voisinage |
+| `GEOFINDER_CONSENSUS_WEIGHT` | `0.35` | Poids du vote de voisinage |
+| `GEOFINDER_RIVAL_SEPARATION_M` | `250` | Distance à partir de laquelle un résultat est un vrai concurrent |
+| `GEOFINDER_MIN_CONFIDENCE` | `0.35` | En dessous, GeoFinder annonce son incertitude |
+| `GEOFINDER_QUERY_CROPS` | `1.0,0.7,0.5` | Recadrages de la requête |
+| `GEOFINDER_CLIP_MODEL` | `ViT-B-16` | Architecture open_clip |
+| `GEOFINDER_CLIP_PRETRAINED` | `laion2b_s34b_b88k` | Poids pré-entraînés |
 
 ---
 
@@ -272,14 +302,24 @@ barre de progression dans l'interface.
 | `Budget de temps dépassé` | La source répond trop lentement : réduis `radius_km` et `max_panos`, ou change de source |
 | `Read timed out` sur une source | Requête acceptée mais trop lourde : augmente `GEOFINDER_DISCOVERY_TIMEOUT`, ou réduis `radius_km` |
 | `Modèle de reconnaissance indisponible` | Poids CLIP absents du cache et réseau coupé (l'image Docker les embarque) |
+| Ville marquée **PÉRIMÉ**, `/api/find` renvoie 409 | Index construit avec un autre modèle : supprime-la et réindexe |
+| « Localisation incertaine » systématique | La zone photographiée n'est pas couverte : réindexe avec un rayon plus petit et `max_panos` plus élevé |
 
 ---
 
 ## Limites connues
 
-- **La couverture fait la précision.** Une photo ne peut être localisée que si
-  une vue proche a été indexée. Avec 250 lieux sur 6 km de rayon, la grille est
-  lâche : augmente `max_panos` et réduis le rayon pour une zone dense.
+- **La couverture fait la précision, et c'est la limite dominante.** Une photo
+  ne peut être localisée que si une vue proche a été indexée. 250 lieux sur un
+  rayon de 6 km, c'est environ un point tous les 450 m : la plupart des rues
+  sont absentes. Pour un résultat exploitable, vise plutôt **2 km de rayon et
+  500 à 1000 lieux**. Aucun réglage d'algorithme ne compense une zone non
+  couverte — au mieux, GeoFinder le reconnaît au lieu de deviner.
+- **Les monuments sont un cas défavorable.** Une photo de la Tour Eiffel prise
+  du Champ-de-Mars ressemble, pour un descripteur global, à toute esplanade
+  dégagée avec une structure verticale. La vérification géométrique et le vote
+  de voisinage corrigent une partie de ces confusions, à condition que le lieu
+  réel soit dans l'index.
 - **La couverture dépend de la source.** Mapillary et KartaView sont
   participatifs : les grands axes sont bien couverts, les ruelles beaucoup
   moins, et la qualité des photos varie (caméras d'action, pare-brise, vélos).

@@ -33,6 +33,7 @@ class CityIndex:
     provider: str
     created_at: str
     views: List[View]
+    model: str = ""
     embeddings: Optional[np.ndarray] = None
 
     @property
@@ -42,6 +43,14 @@ class CityIndex:
     @property
     def demo(self) -> bool:
         return self.provider == "demo"
+
+    @property
+    def stale(self) -> bool:
+        """Index construit avec un autre modèle : ses vecteurs ne sont pas
+        comparables à ceux de la requête, il faut le reconstruire."""
+        from . import config
+
+        return bool(self.model) and self.model != config.model_id()
 
 
 def city_dir(slug: str) -> Path:
@@ -70,6 +79,7 @@ def save(index: CityIndex, embeddings: np.ndarray) -> None:
         "lat": index.lat,
         "lng": index.lng,
         "provider": index.provider,
+        "model": index.model,
         "created_at": index.created_at,
         "views": [asdict(v) for v in index.views],
     }
@@ -97,6 +107,7 @@ def load(slug: str, with_embeddings: bool = True) -> Optional[CityIndex]:
         lat=meta["lat"],
         lng=meta["lng"],
         provider=meta.get("provider", "demo"),
+        model=meta.get("model", ""),
         created_at=meta["created_at"],
         views=[View(**v) for v in meta["views"]],
     )
